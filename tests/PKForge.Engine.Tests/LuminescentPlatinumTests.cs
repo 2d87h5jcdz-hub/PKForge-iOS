@@ -95,6 +95,25 @@ public sealed class LuminescentPlatinumTests
     }
 
     [Fact]
+    public void LuminescentPokemonAreNeverFlaggedIllegal()
+    {
+        // PKHeX judges Lumi's own species and forms by retail rules; no verdict beats a false one.
+        using var session = new SaveEngine().OpenSession(LuminescentSave());
+        Assert.True(new LegalizerService().Generate(session, 0, 0,
+            new GenerationRequest(25, 20, Shiny: false, Nature: null, Ability: null, Ball: null, Moves: null)).Success);
+        var engine = (SaveEngineSession)session;
+        var pk = engine.GetEntity(0, 0);
+        pk.Move1 = 0xFFF; // nothing retail would accept
+        pk.RefreshChecksum();
+        engine.SaveFile.SetBoxSlotAtIndex(pk, 0, 0, EntityImportSettings.None);
+
+        Assert.False(session.SupportsLegalityAnalysis);
+        var legality = new LegalityService();
+        Assert.True(legality.Analyze(session, 0, 0).Valid);
+        Assert.Empty(legality.Sweep(session));
+    }
+
+    [Fact]
     public void LuminescentExclusiveItemsHaveNamesPouchesAndRoundTrip()
     {
         using var session = new SaveEngine().OpenSession(LuminescentSave());
@@ -118,5 +137,40 @@ public sealed class LuminescentPlatinumTests
         Assert.Equal(3, saved[dex + 493 / 2] >> 4); // species 494 is the high nibble
         using var reloaded = new SaveEngine().OpenSession(saved);
         Assert.True(reloaded.GetDexEntry(494).Caught);
+    }
+
+    [Fact]
+    public void LegalityIsOffBecauseRetailDataDoesNotApply()
+    {
+        using var session = new SaveEngineSession(LuminescentSave());
+        Assert.False(session.SupportsLegalityAnalysis);
+        using var retail = new SaveEngineSession(new SAV8BS { Version = GameVersion.BD }.Write().ToArray());
+        Assert.True(retail.SupportsLegalityAnalysis);
+    }
+
+    [Fact]
+    public void CustomFormsHaveTheirLumiNames()
+    {
+        using var session = new SaveEngineSession(LuminescentSave());
+        Assert.Equal(["Normal", "Mega", "Gigantamax", "Stitched"], session.GetFormChoices((int)Species.Gengar));
+        Assert.Equal(["Normal", "Mega X", "Mega Y", "Armor MK2", "Armor MK1"], session.GetFormChoices((int)Species.Mewtwo));
+        Assert.Equal(["Normal", "Crystal"], session.GetFormChoices((int)Species.Onix));
+        // Pikachu has 18 forms in Lumi: the one PKHeX cannot name still gets a row.
+        var pikachu = session.GetFormChoices((int)Species.Pikachu);
+        Assert.Equal(18, pikachu.Count);
+        Assert.Equal("Form 17", pikachu[^1]);
+        // Every Lumi form list matches the form count its personal table declares.
+        foreach (var species in new[] { Species.Venusaur, Species.Charizard, Species.Blastoise, Species.Gengar, Species.Onix, Species.Eevee, Species.Mewtwo })
+            Assert.Equal(PersonalTable.BDSPLUMI[(ushort)species].FormCount, session.GetFormChoices((int)species).Count);
+    }
+
+    [Fact]
+    public void ItemsLumiBringsBackCanBeHeld()
+    {
+        using var session = new SaveEngineSession(LuminescentSave());
+        var held = new MonInfoService().GetHeldItems(session);
+        Assert.Contains(538, held); // Eviolite
+        Assert.Contains(540, held); // Rocky Helmet
+        Assert.Equal(held.Count, held.Distinct().Count());
     }
 }

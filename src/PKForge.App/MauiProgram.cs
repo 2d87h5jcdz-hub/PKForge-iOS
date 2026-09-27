@@ -14,6 +14,8 @@ public static class MauiProgram
 {
     public static MauiApp CreateMauiApp()
     {
+        // First thing: every crash from here on leaves a report the player can share.
+        Services.AppLog.Install();
         var builder = MauiApp.CreateBuilder();
         App.Trace("CreateMauiApp enter");
 #if ANDROID

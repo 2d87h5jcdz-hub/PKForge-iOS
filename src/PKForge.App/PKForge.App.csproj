@@ -10,8 +10,8 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ApplicationId>org.pkforge.app</ApplicationId>
     <ApplicationTitle>PKForge</ApplicationTitle>
-    <ApplicationVersion>302</ApplicationVersion>
-    <ApplicationDisplayVersion>3.0.2</ApplicationDisplayVersion>
+    <ApplicationVersion>303</ApplicationVersion>
+    <ApplicationDisplayVersion>3.0.3</ApplicationDisplayVersion>
     <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
   </PropertyGroup>
   <PropertyGroup Condition="'$(DiagnosticBuild)' == 'true'">
@@ -46,6 +46,8 @@
     <MauiAsset Include="Resources/Events/*.bin.gz" LogicalName="events/%(Filename)%(Extension)" />
     <MauiAsset Include="../../external/PKHeX/PKHeX.Drawing.PokeSprite/Resources/img/Big Pokemon Sprites/*.png" LogicalName="sprites/%(Filename)%(Extension)" />
     <MauiAsset Include="../../external/PKHeX/PKHeX.Drawing.PokeSprite/Resources/img/Big Shiny Sprites/*.png" LogicalName="sprites/%(Filename)%(Extension)" />
+    <!-- Luminescent Platinum's custom form icons (Team Lumi; see Resources/UI/ATTRIBUTION.md). -->
+    <MauiAsset Include="Resources/UI/lumi/*.png" LogicalName="sprites/lumi/%(Filename)%(Extension)" />
     <!-- PKHeX ships no pixel sprites past species 905 (Legends: Arceus); for Gen 9 it
          displays official artwork. Bundle that artwork block (base + forms, ~1MB) as
          the offline Gen 9 fallback, exactly what PKHeX itself shows. -->

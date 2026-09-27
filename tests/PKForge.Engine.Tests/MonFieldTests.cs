@@ -206,17 +206,18 @@ public sealed class MonFieldTests
     [Fact]
     public void SwordShieldShinyStarAndSquareAreDistinct()
     {
+        // A wild Sword/Shield catch: overworld shinies are only ever stars, so a square one is
+        // stored as asked (like PKHeX) but cannot be legal, while a star is rebuilt legally.
         using var session = Legal(8, Pikachu);
         Assert.True(MonFieldService.GetShiny(session, 0, 0).SupportsKind);
+        Assert.True(MonFieldService.SetShinyKind(session, 0, 0, ShinyKind.Star));
+        Assert.Equal(ShinyKind.Star, MonFieldService.GetShiny(session, 0, 0).Kind);
+        Assert.NotEqual(0, Stored(session).ShinyXor);
+        AssertLegal(session);
+
         Assert.True(MonFieldService.SetShinyKind(session, 0, 0, ShinyKind.Square));
         Assert.Equal(0, Stored(session).ShinyXor);
         Assert.Equal(ShinyKind.Square, MonFieldService.GetShiny(session, 0, 0).Kind);
-        AssertLegal(session);
-
-        Assert.True(MonFieldService.SetShinyKind(session, 0, 0, ShinyKind.Star));
-        Assert.Equal(1, Stored(session).ShinyXor);
-        Assert.Equal(ShinyKind.Star, MonFieldService.GetShiny(session, 0, 0).Kind);
-        AssertLegal(session);
 
         Assert.True(MonFieldService.SetShinyKind(session, 0, 0, ShinyKind.None));
         Assert.False(Stored(session).IsShiny);

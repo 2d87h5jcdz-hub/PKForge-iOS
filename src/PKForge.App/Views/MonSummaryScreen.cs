@@ -91,7 +91,7 @@ public sealed class MonSummaryScreen : IPadPagingHandler
         var hints = new List<(string, string, Action?)>
         {
             ("◀▶", "Page", () => _view.TurnPage(1)),
-            ("LR", "Pokémon", null),
+            ("LR", "Pokémon", () => OnPadButton(PadButton.R)),
         };
         if (deck.CanEdit) hints.Add(("X", "Edit", () => Close(true)));
         hints.Add(("B", "Close", () => Close(false)));

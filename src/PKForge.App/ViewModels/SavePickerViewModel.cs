@@ -1,3 +1,4 @@
+using PKForge.App.Services;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -312,6 +313,7 @@ public partial class SavePickerViewModel : ObservableObject
                 }
             }
             _scanningRoot = null;
+            AppLog.Info("scan", $"{roots.Count} linked folder(s): {Saves.Count} save(s), {filesSeen} file(s) scanned, {_rejectedCandidates.Count} rejected");
             RebuildGroups();
             Status = Saves.Count == 0
                 ? $"No games found. Scanned {filesSeen} file(s), {_rejectedCandidates.Count} looked like saves but did not parse."
@@ -500,6 +502,7 @@ public partial class SavePickerViewModel : ObservableObject
             // Release builds shorten framework messages to resource keys; the full error goes
             // to the copyable scan report so a player can send it.
             _scanDiagnostics.Add($"OPEN FAILED (single file) {error}");
+            AppLog.Error("open", "Linking a single save file failed", error);
             Status = $"Could not link save: {error.Message}";
         }
         finally
@@ -564,11 +567,13 @@ public partial class SavePickerViewModel : ObservableObject
             await _sessions.OpenAsync(new PickedDocument(save.DocumentId, save.EngineHint));
             _boxBrowser.RefreshFromCurrentSession();
             OpenedSave = true;
+            AppLog.Info("open", $"Opened {save.GameLabel} ({save.Emulator}, gen {save.Generation})");
             Status = "Connected.";
         }
         catch (Exception error)
         {
             _scanDiagnostics.Add($"OPEN FAILED {save.FileName} {error}");
+            AppLog.Error("open", $"Opening {save.GameLabel} ({save.Emulator}, {save.FileName}) failed", error);
             Status = $"Could not connect: {error.Message}";
         }
         finally

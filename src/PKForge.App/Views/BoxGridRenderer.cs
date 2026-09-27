@@ -87,6 +87,8 @@ public static class BoxGridRenderer
         var wallpaper = WallpaperAt(viewModel.BoxIndex);
         var cell = GridMetrics(info).Cell;
         PaintBackdrop(canvas, info, viewModel.BoxIndex);
+        // BDSP and Luminescent Platinum boxes wear the BDSP-style icons once downloaded.
+        var bdspStyle = Domain.BdspIcons.AppliesTo(viewModel.Save?.Format);
 
         // White ink with the wallpaper-shade shadow: text that reads on any flat.
         var shadow = Pksm.WallpaperShade(wallpaper);
@@ -114,13 +116,13 @@ public static class BoxGridRenderer
                 {
                     // The lifted mon leaves a dashed gold ghost behind.
                     canvas.SaveLayer(GhostPaint);
-                    DrawSprite(canvas, rect, slots[index], sprites, invalidate, font, shadow);
+                    DrawSprite(canvas, rect, slots[index], sprites, invalidate, font, shadow, bdspStyle);
                     canvas.Restore();
                     PksmPaint.CarryGhost(canvas, rect);
                 }
                 else
                 {
-                    DrawSprite(canvas, rect, slots[index], sprites, invalidate, font, shadow);
+                    DrawSprite(canvas, rect, slots[index], sprites, invalidate, font, shadow, bdspStyle);
                 }
             }
 
@@ -135,7 +137,7 @@ public static class BoxGridRenderer
                 {
                     var lift = cell * 0.18f;
                     DrawSprite(canvas, new SKRect(rect.Left, rect.Top - lift, rect.Right, rect.Bottom - lift),
-                        carried, sprites, invalidate, font, shadow);
+                        carried, sprites, invalidate, font, shadow, bdspStyle);
                 }
             }
 
@@ -169,15 +171,34 @@ public static class BoxGridRenderer
             var held = viewModel.CarriedSummary;
             if (hand.Draw(canvas, cell, (c, r) =>
                 {
-                    if (held is not null) DrawSprite(c, r, held, sprites, invalidate, font, shadow);
+                    if (held is not null) DrawSprite(c, r, held, sprites, invalidate, font, shadow, bdspStyle);
                 }))
                 invalidate();
         }
     }
 
+    // The BDSP icons are 128 px renders drawn smaller: smooth sampling, unlike the pixel set.
+    private static readonly SKSamplingOptions IconSampling = new(SKFilterMode.Linear, SKMipmapMode.Linear);
+
     private static void DrawSprite(SKCanvas canvas, SKRect rect, Domain.SlotSummary slot,
-        ISpriteService sprites, Action invalidate, SKFont font, SKColor shadow)
+        ISpriteService sprites, Action invalidate, SKFont font, SKColor shadow, bool bdspStyle = false)
     {
+        if (bdspStyle)
+        {
+            // Loading: draw nothing for a blink rather than flash the pixel sprite first.
+            if (!sprites.TryGetBdspIcon(slot.Look, invalidate, out var icon)) return;
+            if (icon is not null)
+            {
+                var edge = Math.Min(rect.Width, rect.Height);
+                var side = edge * 0.98f;
+                var fit = side / Math.Max(icon.Width, icon.Height);
+                var iw = icon.Width * fit;
+                var ih = icon.Height * fit;
+                using var iconImage = SKImage.FromBitmap(icon);
+                canvas.DrawImage(iconImage, new SKRect(rect.MidX - iw / 2, rect.MidY - ih / 2, rect.MidX + iw / 2, rect.MidY + ih / 2), IconSampling);
+                return;
+            }
+        }
         var bitmap = sprites.GetSprite(slot.Look);
         if (bitmap is not null)
         {

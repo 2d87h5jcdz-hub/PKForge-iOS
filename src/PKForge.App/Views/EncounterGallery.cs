@@ -294,7 +294,7 @@ public static class EncounterGallery
                 {
                     heroRow,
                     _wall,
-                    Kit.WindowHints(("A", "WAYS", null), ("B", "BACK", () => Close(null))),
+                    Kit.WindowHints(("A", "WAYS", () => OnPadButton(PadButton.A)), ("B", "BACK", () => Close(null))),
                 },
             };
             content.SetRow(_wall, 1);

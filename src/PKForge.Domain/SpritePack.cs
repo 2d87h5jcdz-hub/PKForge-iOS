@@ -11,7 +11,7 @@ public static class SpritePack
     public const string RemoteRoot = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/";
 
     /// <summary>Cache folders the pack writes into, relative to the app data directory.</summary>
-    public static IReadOnlyList<string> Folders { get; } = ["home", "showdown", "items"];
+    public static IReadOnlyList<string> Folders { get; } = ["home", "showdown", "items", BdspIcons.Folder];
 
     /// <summary>One pack file: its cache path ("home/6-s.png") and the URL it comes from.</summary>
     public sealed record Entry(string CachePath, string Url);

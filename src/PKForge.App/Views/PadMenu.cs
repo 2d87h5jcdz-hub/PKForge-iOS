@@ -86,7 +86,7 @@ public sealed class PadMenu : IPadHandler
             });
         }
         content.Children.Add(grid);
-        content.Children.Add(Kit.WindowHints(("A", "Choose", null), ("B", "Cancel", () => Close(null))));
+        content.Children.Add(Kit.WindowHints(("A", "Choose", () => OnPadButton(PadButton.A)), ("B", "Cancel", () => Close(null))));
 
         // PadMenu owns the ScrollView (same structure as OverlayWindow's default) so
         // Highlight can scroll the cursor into view; the window caps to the host.

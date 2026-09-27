@@ -83,7 +83,13 @@ public sealed class BankBoxOverview : IPadPagingHandler
             BackgroundColor = Colors.Transparent,
             Margin = new Thickness(10, 8),
         };
-        _overlay = Kit.AttachOverlay(host, window);
+        // Tapping outside does what B does: cancel a carry, else close.
+        _overlay = Kit.AttachOverlay(host, window, () =>
+        {
+            if (_busy) return;
+            if (_held is not null) CancelCarry();
+            else Close(null);
+        });
 
         Reload();
         _cursor = Math.Clamp(currentBox, 0, _boxes.Length - 1);
@@ -393,6 +399,11 @@ public sealed class BankBoxOverview : IPadPagingHandler
                     _frame.Request();
                 }
                 break;
+            case SKTouchAction.Released when !_dragging && !_scrolling && _hintHits.FirstOrDefault(h => h.Rect.Contains(point)) is { Rect.Width: > 0 } hint:
+                _longPress?.Stop();
+                _pressAt = null;
+                OnPadButton(hint.Button);
+                break;
             case SKTouchAction.Released:
             case SKTouchAction.Cancelled:
                 _longPress?.Stop();
@@ -434,6 +445,7 @@ public sealed class BankBoxOverview : IPadPagingHandler
     // ── Layout & paint ─────────────────────────────────────────────────────
 
     private SKRect _grid;
+    private (SKRect Rect, PadButton Button)[] _hintHits = [];
     private float _cardWidth;
     private float _cardHeight;
     private float _gap;
@@ -462,10 +474,9 @@ public sealed class BankBoxOverview : IPadPagingHandler
         SKRect.Create(_grid.Left + _gap + column * (_cardWidth + _gap),
             _grid.Top + _gap * 0.5f + (row - _scroll.Value) * (_cardHeight + _gap), _cardWidth, _cardHeight);
 
-    private int? BoxAt(SKPoint viewPoint)
+    // Touch locations arrive in canvas pixels, the space the layout is measured in.
+    private int? BoxAt(SKPoint point)
     {
-        var point = new SKPoint(viewPoint.X * (_canvas.CanvasSize.Width / Math.Max(1f, (float)_canvas.Width)),
-            viewPoint.Y * (_canvas.CanvasSize.Height / Math.Max(1f, (float)_canvas.Height)));
         if (!_grid.Contains(point)) return null;
         var column = (int)((point.X - _grid.Left - _gap * 0.5f) / (_cardWidth + _gap));
         var row = (int)MathF.Floor((point.Y - _grid.Top) / (_cardHeight + _gap) + _scroll.Value);
@@ -516,7 +527,7 @@ public sealed class BankBoxOverview : IPadPagingHandler
             var lift = _lift.Value;
             var bob = MathF.Sin(_pacer.Now * 5.2f) * 3f * _density * lift;
             var target = _dragging
-                ? SKRect.Create(_finger.X * _density - _cardWidth / 2, _finger.Y * _density - _cardHeight / 2, _cardWidth, _cardHeight)
+                ? SKRect.Create(_finger.X - _cardWidth / 2, _finger.Y - _cardHeight / 2, _cardWidth, _cardHeight)
                 : cursor;
             var grow = 1 + 0.08f * lift;
             var rect = SKRect.Create(target.MidX - target.Width * grow / 2, target.MidY - target.Height * grow / 2 - 14 * _density * lift + bob,
@@ -539,10 +550,15 @@ public sealed class BankBoxOverview : IPadPagingHandler
         }
 
         var hintBar = new SKRect(0, info.Height - HintHeight * _density, info.Width, info.Height);
-        IReadOnlyList<(string, string)> prompts = _held is null
-            ? [("A", "Open"), ("Y", "Pick up"), ("X", "Box menu"), ("+", "New box"), ("L/R", "Page"), ("B", "Close")]
-            : [("A", "Drop here"), ("X", _carry == Carry.Swap ? "Move instead" : "Swap instead"), ("B", "Cancel")];
+        (string Key, string Label, PadButton Button)[] hints = _held is null
+            ? [("A", "Open", PadButton.A), ("Y", "Pick up", PadButton.Y), ("X", "Box menu", PadButton.X),
+               ("+", "New box", PadButton.Start), ("R", "Page", PadButton.R), ("B", "Close", PadButton.B)]
+            : [("A", "Drop here", PadButton.A), ("X", _carry == Carry.Swap ? "Move instead" : "Swap instead", PadButton.X), ("B", "Cancel", PadButton.B)];
+        var prompts = hints.Select(h => (h.Key, h.Label)).ToArray();
         PksmPaint.HintBar(canvas, hintBar, prompts, small);
+        // Every prompt is a button for touch: the same action as its pad key.
+        var rects = PksmPaint.HintBarHitRects(hintBar, prompts, small);
+        _hintHits = [.. rects.Select((r, i) => (r, hints[i].Button))];
         _pacer.Continue(moving || _staleCards);
     }
 

@@ -197,9 +197,11 @@ public static class InfoPickers
     public static Task<PickItem?> ShowHeldItemsAsync(Grid host, string title, IGameDataService data, ISaveEngineSession? session,
         int? current, Func<int, string?> iconFor)
     {
-        var names = data.ItemNames;
-        // The open game's own item table names ids correctly in Gen 1-4 (Rare Candy et al).
-        var gameNames = session?.GetItemNames() is { Count: > 0 } n ? n : names;
+        // The open game's own item table: held items are stored in its id space, and Gen 1-3
+        // number items differently from the modern table, so labels and the id written back
+        // must both come from it. The modern names only fill in effect descriptions.
+        var modern = data.ItemNames;
+        var names = session?.GetItemNames() is { Count: > 0 } n ? n : modern;
         var legal = session is not null ? Info?.GetHeldItems(session).ToHashSet() ?? [] : [];
 
         var items = new List<PickItem>(names.Count) { new(0, "(none)", Detail: "Holds nothing.") };
@@ -207,7 +209,7 @@ public static class InfoPickers
         for (var id = 1; id < names.Count; id++)
         {
             if (names[id].Length == 0) continue;
-            var description = DexFacts.Item(id < gameNames.Count ? gameNames[id] : names[id]) ?? DexFacts.Item(names[id]);
+            var description = DexFacts.Item(names[id]);
             rows.Add(new PickItem(id, names[id], iconFor(id), Blank(description)) { Muted = legal.Count > 0 && !legal.Contains(id) });
         }
         // Holdable first, in the game's id order (it groups balls, berries, plates…).

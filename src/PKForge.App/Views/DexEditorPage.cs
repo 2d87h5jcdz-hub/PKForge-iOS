@@ -78,9 +78,9 @@ public sealed class DexEditorPage : IPadPagingHandler
         _canvas.Touch += Touch;
 
         View hints = Kit.WindowHints(
-            ("A", "Cycle", null),
+            ("A", "Cycle", () => OnPadButton(PadButton.A)),
             ("B", "Done", () => _ = CloseAsync()),
-            ("LR", "Page", null),
+            ("LR", "Page", () => OnPadButton(PadButton.R)),
             ("Y", "Select all (gaps)", SelectAllGaps),
             ("X", "Actions", () => _ = ShowActionsAsync()));
 

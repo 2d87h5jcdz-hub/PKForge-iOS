@@ -114,7 +114,7 @@ public sealed class HomePage : ContentPage, IPadHandler
         var bodyHost = new Grid { Children = { DsChrome.GridBackground(), body } };
 
         var footer = DsChrome.Footer(
-            ("A", "Open", null),
+            ("A", "Open", () => OnPadButton(PadButton.A)),
             // The cartridge identity menu (rename, color, which game): B on the pad, a hold by touch.
             ("B", "Edit game · hold", () =>
             {
@@ -215,6 +215,12 @@ public sealed class HomePage : ContentPage, IPadHandler
     {
         base.OnAppearing();
         _isAppearing = true;
+        if (!_crashOffered)
+        {
+            _crashOffered = true;
+            _ = OfferCrashReportAsync();
+        }
+        _ = IPlatformApplication.Current?.Services.GetService<SpritePackDownloader>()?.FetchAddOnsQuietlyAsync();
         // The lower screen shows the shelf's highlighted game while Home is in front.
         _secondClaim ??= IPlatformApplication.Current?.Services.GetService<SecondScreenState>()?.Routes.CreateClaim(SecondScreenOwner.Home);
         _secondClaim?.Activate();
@@ -841,6 +847,9 @@ public sealed class HomePage : ContentPage, IPadHandler
             new PadOption($"Download full sprite pack ({SpritePackDownloader.SizeHint})", IconPath: "download"),
             new PadOption("Rescan games", IconPath: "refresh"),
             new PadOption("Scan report", IconPath: "report"),
+            new PadOption("Share logs", IconPath: "export", Detail: "Crash reports and recent activity, to send us when something goes wrong."),
+            new PadOption(SecondScreenMode.UserOff ? "Second screen: OFF" : "Second screen: ON", IconPath: "compact",
+                Detail: "OFF keeps PKForge on one screen, so the other stays free (an emulator, say)."),
             new PadOption(Services.HaXMode.IsOn ? "HaX mode: ON" : "HaX mode: OFF", IconPath: "hax"),
             new PadOption(Services.HardcoreMode.IsOn ? "Hardcore mode: ON" : "Hardcore mode: OFF", IconPath: "hardcore"));
         switch (choice)
@@ -864,6 +873,29 @@ public sealed class HomePage : ContentPage, IPadHandler
                 // Called directly: the command refuses to start while an older run it owns is still pending.
                 await _viewModel.RescanAsync();
                 break;
+            case "Share logs":
+                await ShareLogsAsync();
+                break;
+            case "Second screen: ON" or "Second screen: OFF":
+            {
+                var turnOff = !SecondScreenMode.UserOff;
+                SecondScreenMode.SetUserOff(turnOff);
+                var host = IPlatformApplication.Current?.Services.GetService<ISecondaryDisplayHost>();
+                try
+                {
+                    if (turnOff) { if (host is not null) await host.DismissAsync(); }
+                    else if (host?.IsAvailable == true) await host.ShowAsync();
+                }
+                catch (InvalidOperationException error)
+                {
+                    AppLog.Warn("second", $"Toggling the lower screen: {error.Message}");
+                }
+                AppLog.Info("second", turnOff ? "Player turned the second screen off" : "Player turned the second screen on");
+                _viewModel.Status = turnOff
+                    ? "Second screen off: PKForge stays on this screen."
+                    : host?.IsAvailable == true ? "Second screen on." : "Second screen on, but no second display is available.";
+                break;
+            }
             case "Scan report":
             {
                 var action = await PadMenu.ShowAsync(_hostGrid, "Scan report", _viewModel.ScanReport, "Copy report", "Close");
@@ -896,6 +928,41 @@ public sealed class HomePage : ContentPage, IPadHandler
                 _viewModel.Status = "Hardcore mode is OFF.";
                 break;
         }
+    }
+
+    /// <summary>
+    /// Zips the logs, crash reports, device details and scan report, then opens the share
+    /// sheet. Nothing is sent anywhere unless the player picks where it goes.
+    /// </summary>
+    private async Task ShareLogsAsync()
+    {
+        try
+        {
+            var archive = await Task.Run(() => AppLog.BuildShareArchive(new Dictionary<string, string>
+            {
+                ["scan-report.txt"] = _viewModel.ScanReport,
+            }));
+            AppLog.MarkCrashesSeen();
+            await Share.Default.RequestAsync(new ShareFileRequest("PKForge logs", new ShareFile(archive, "application/zip")));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            AppLog.Error("logs", "Sharing the logs failed", error);
+            await PadMenu.ShowAsync(_hostGrid, "Share logs", $"The logs could not be packed: {error.Message}", "OK");
+        }
+    }
+
+    private bool _crashOffered;
+
+    /// <summary>After a crash, offers the report once on the next launch.</summary>
+    private async Task OfferCrashReportAsync()
+    {
+        if (AppLog.UnseenCrashes().Count == 0) return;
+        var choice = await PadMenu.ShowAsync(_hostGrid, "PKForge closed unexpectedly",
+            "A crash report was saved. Sharing it helps us fix it: it holds the error, your recent activity, file names and your device model, never your save data.",
+            "Share report", "Not now");
+        AppLog.MarkCrashesSeen();
+        if (choice == "Share report") await ShareLogsAsync();
     }
 
     /// <summary>Downloads every species' animated + HOME sprites for full offline use.</summary>

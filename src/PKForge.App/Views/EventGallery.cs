@@ -492,7 +492,7 @@ public static class EventGallery
                 ("A", "Open", OpenCard),
                 ("X", "Search", FocusSearch),
                 ("Y", "Filters", () => _ = ShowFilterMenuAsync()),
-                ("LR", "Section", null),
+                ("LR", "Section", () => OnPadButton(PadButton.R)),
                 ("+", "Sort", CycleSort),
                 ("B", "Back", () => Close(null)));
 
@@ -1243,7 +1243,7 @@ public static class EventGallery
             var hintList = new List<(string, string, Action?)> { ("A", itemCard ? "Add to bag" : "Receive", Receive) };
             if (!itemCard) hintList.Add(("X", "To Bank", () => _ = SendToBankAsync()));
             hintList.Add(("Y", "Export", () => _ = ExportMenuAsync()));
-            if (_variants.Count > 1) hintList.Add(("LR", "Language", null));
+            if (_variants.Count > 1) hintList.Add(("LR", "Language", () => OnPadButton(PadButton.R)));
             hintList.Add(("B", "Close", () => Close(null)));
             var hints = Kit.WindowHints([.. hintList]);
 

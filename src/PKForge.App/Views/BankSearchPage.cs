@@ -111,9 +111,9 @@ public sealed class BankSearchPage : IPadPagingHandler
         _canvas.Touch += Touch;
 
         View hints = Kit.WindowHints(
-            ("A", "Jump", null),
+            ("A", "Jump", () => OnPadButton(PadButton.A)),
             ("B", "Done", () => Close()),
-            ("LR", "Page", null),
+            ("LR", "Page", () => OnPadButton(PadButton.R)),
             ("X", "Filter", () => _ = ShowFilterMenuAsync()),
             ("Y", "Shiny", ToggleShinyOnly),
             ("+", "Mark all", MarkAllResults));

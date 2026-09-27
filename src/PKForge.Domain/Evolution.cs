@@ -39,6 +39,9 @@ public sealed record EvolutionMoveChoice(int Move, int Slot);
 /// <param name="NewNickname">The species name it takes, or null when it keeps a custom nickname.</param>
 /// <param name="StatsBefore">H/A/B/C/D/S now.</param>
 /// <param name="StatsAfter">H/A/B/C/D/S after evolving.</param>
+/// <param name="MeetCondition">When the requirement is not met but PKForge can meet it legally
+/// (raise the level or friendship, give the held item, teach the move...), what it would
+/// change, e.g. "Raises it to Lv. 36"; evolving that way needs <see cref="EvolutionRequest.MeetCondition"/>.</param>
 public sealed record EvolutionOption(
     int Id,
     int Species,
@@ -56,7 +59,8 @@ public sealed record EvolutionOption(
     string AbilityAfter,
     IReadOnlyList<int> StatsBefore,
     IReadOnlyList<int> StatsAfter,
-    IReadOnlyList<EvolutionMoveOffer> Moves)
+    IReadOnlyList<EvolutionMoveOffer> Moves,
+    string? MeetCondition = null)
 {
     public bool IsTrade => Trigger is EvolutionTrigger.Trade or EvolutionTrigger.TradeHoldingItem or EvolutionTrigger.TradeForPartner;
 }
@@ -79,12 +83,14 @@ public sealed record EvolutionPlan(
 /// <param name="Moves">Moves to teach on evolving; null or empty learns nothing (a move goes into a free slot on its own when <see cref="LearnIntoFreeSlots"/>).</param>
 /// <param name="Hax">HaX mode: requirements that are not met are ignored.</param>
 /// <param name="TradePartnerName">Gen 6+: the link partner recorded as handling trainer for an untraded Pokémon.</param>
+/// <param name="MeetCondition">Make the changes in <see cref="EvolutionOption.MeetCondition"/> first, then evolve.</param>
 public sealed record EvolutionRequest(
     int OptionId,
     IReadOnlyList<EvolutionMoveChoice>? Moves = null,
     bool Hax = false,
     string? TradePartnerName = null,
-    bool LearnIntoFreeSlots = false);
+    bool LearnIntoFreeSlots = false,
+    bool MeetCondition = false);
 
 /// <summary>Lists and performs in-game-faithful evolutions for a stored Pokémon.</summary>
 public interface IEvolutionService

@@ -173,6 +173,7 @@ public sealed class MonInfoService : IMonInfoService
     {
         ArgumentNullException.ThrowIfNull(session);
         if (session is not SaveEngineSession engine) return [];
+        if (Luminescent.LumiData.IsLumi(engine.SaveFile)) return Luminescent.LumiData.HeldItems(engine.SaveFile);
         var held = engine.SaveFile.HeldItems;
         var list = new List<int>(held.Length);
         foreach (var item in held)

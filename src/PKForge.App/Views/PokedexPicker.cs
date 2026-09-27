@@ -267,9 +267,9 @@ public sealed class PokedexPicker : IPadHandler
         content.Add(filters); Grid.SetRow(filters, 2);
         content.Add(_grid); Grid.SetRow(_grid, 3);
         var hints = Kit.WindowHints(
-            ("A", "Choose", null),
+            ("A", "Choose", () => OnPadButton(PadButton.A)),
             ("B", "Cancel", () => Close(null)),
-            ("LR", "Gen", null),
+            ("LR", "Gen", () => OnPadButton(PadButton.R)),
             ("X", "Types", () => _ = ShowTypeFilterMenuAsync()),
             ("+", "Filters", () => _ = ShowFilterAxisMenuAsync()),
             ("Y", "Clear", ClearFilters));

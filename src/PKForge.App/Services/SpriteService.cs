@@ -55,6 +55,16 @@ public interface ISpriteService
     void WarmShowdown(SpriteLook look, Action onLoaded);
 
     /// <summary>
+    /// BDSP-style box icon (the optional add-on) with three-state semantics, like
+    /// <see cref="TryGetShowdown"/>: false while it loads (draw nothing, no pixel flash);
+    /// true with the icon; true with null when the add-on has none (draw the pixel sprite).
+    /// </summary>
+    bool TryGetBdspIcon(SpriteLook look, Action onLoaded, out SKBitmap? icon);
+
+    /// <summary>Forgets which looks had no add-on icon, after an add-on was downloaded.</summary>
+    void ForgetAddOnLookups();
+
+    /// <summary>
     /// Downloads one sprite pack file straight to its disk cache without decoding it, so bulk
     /// downloads hold no bitmaps. False when the download failed.
     /// </summary>
@@ -344,6 +354,70 @@ public sealed class SpriteService : ISpriteService
     /// draw in progress (disposing on this background thread could).
     /// </summary>
     private static void DisposeAfterPaint(SKBitmap bitmap) => MainThread.BeginInvokeOnMainThread(bitmap.Dispose);
+
+    // Which add-on file a look resolves to (null: none), found once per look: a box repaints
+    // every frame while it animates, and probing the disk each time would be wasteful.
+    private readonly Dictionary<string, string?> _bdspPaths = new(StringComparer.Ordinal);
+
+    // Repaints of boxes that drew a pixel sprite for want of an add-on icon, so an add-on
+    // arriving in the background shows up without leaving the box.
+    private readonly Dictionary<string, Action> _awaitingAddOn = new(StringComparer.Ordinal);
+
+    public void ForgetAddOnLookups()
+    {
+        Action[] repaint;
+        lock (_gate)
+        {
+            _bdspPaths.Clear();
+            repaint = [.. _awaitingAddOn.Values.Distinct()];
+            _awaitingAddOn.Clear();
+        }
+        foreach (var invalidate in repaint) MainThread.BeginInvokeOnMainThread(invalidate);
+    }
+
+    public bool TryGetBdspIcon(SpriteLook look, Action onLoaded, out SKBitmap? icon)
+    {
+        icon = null;
+        string? path;
+        lock (_gate)
+        {
+            if (!_bdspPaths.TryGetValue(look.CacheKey, out path))
+            {
+                path = BdspIcons.Candidates(look)
+                    .Select(candidate => Path.Combine(FileSystem.AppDataDirectory, candidate))
+                    .FirstOrDefault(File.Exists);
+                _bdspPaths[look.CacheKey] = path;
+            }
+            if (path is null)
+            {
+                // Not in the add-on, or not downloaded yet: pixel sprite until it arrives.
+                if (_awaitingAddOn.Count < 512) _awaitingAddOn[look.CacheKey] = onLoaded;
+                return true;
+            }
+            var key = "bdsp-" + path;
+            if (_cache.TryGetValue(key, out icon)) return true;
+            if (!_loading.Add(key)) return false;
+        }
+
+        var file = path;
+        Task.Run(async () =>
+        {
+            SKBitmap? bitmap = null;
+            await DecodeGate.WaitAsync().ConfigureAwait(false);
+            try { bitmap = SKBitmap.Decode(file); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            finally { DecodeGate.Release(); }
+            lock (_gate)
+            {
+                _loading.Remove("bdsp-" + file);
+                _cache["bdsp-" + file] = bitmap; // an unreadable file caches null: pixel sprite from then on
+                _eviction.Enqueue("bdsp-" + file);
+                TrimCache();
+            }
+            onLoaded();
+        });
+        return false;
+    }
 
     public async Task<bool> DownloadPackFileAsync(SpritePack.Entry entry, CancellationToken cancellationToken)
     {

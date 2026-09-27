@@ -58,6 +58,7 @@ public partial class BoxBrowserViewModel : ObservableObject, IBoxPager
     // Editor fields (strings for binding; parsed on save).
     [ObservableProperty] private string _editNickname = string.Empty;
     [ObservableProperty] private string _editLevel = string.Empty;
+    [ObservableProperty] private string _editFriendship = string.Empty;
     [ObservableProperty] private string _editSpecies = string.Empty;
     [ObservableProperty] private string _editNature = string.Empty;
     [ObservableProperty] private string _editAbility = string.Empty;
@@ -148,6 +149,7 @@ public partial class BoxBrowserViewModel : ObservableObject, IBoxPager
 
         EditNickname = detail.Nickname;
         EditLevel = detail.Level.ToString();
+        EditFriendship = detail.Friendship.ToString();
         EditSpecies = detail.Species.ToString();
         EditNature = detail.Nature.ToString();
         EditAbility = detail.Ability.ToString();
@@ -179,6 +181,9 @@ public partial class BoxBrowserViewModel : ObservableObject, IBoxPager
         // No transient "analyzing" flash: stay blank until the verdict is ready.
         LegalityBadge = string.Empty;
         LegalityText = string.Empty;
+        // Romhacks PKHeX cannot judge (Luminescent Platinum's own species and forms) get no
+        // verdict at all rather than a false "illegal".
+        if (!engineSession.SupportsLegalityAnalysis) return;
         Task.Run(() =>
         {
             var report = _legality.Analyze(engineSession, BoxIndex, slot);
@@ -218,6 +223,7 @@ public partial class BoxBrowserViewModel : ObservableObject, IBoxPager
                 Species: ParseInt(EditSpecies),
                 Nickname: EditNickname.Length == 0 ? null : EditNickname,
                 Level: ParseInt(EditLevel),
+                Friendship: ParseInt(EditFriendship),
                 Nature: ParseInt(EditNature),
                 Ability: ParseInt(EditAbility),
                 HeldItem: ParseInt(EditHeldItem),
@@ -439,7 +445,15 @@ public partial class BoxBrowserViewModel : ObservableObject, IBoxPager
             var outcome = await Task.Run(() => operation(engineSession));
             if (!outcome.Success)
             {
+                // A refused edit (Make mine on an event gift, say) leaves the player on the same
+                // Pokémon with the reason, not on an empty editor with nothing selected.
+                var (keepBox, keepSlot) = (BoxIndex, SelectedSlot);
                 DiscardPartialEdits();
+                if (_sessions.Current is not null && keepSlot >= 0)
+                {
+                    BoxIndex = keepBox;
+                    SelectSlot(keepSlot);
+                }
                 Status = outcome.Message;
                 return false;
             }
@@ -490,6 +504,7 @@ public partial class BoxBrowserViewModel : ObservableObject, IBoxPager
         catch (Exception error)
         {
             DiscardPartialEdits();
+            AppLog.Error("edit", $"Edit aborted ({action})", error);
             Status = $"Aborted: {error.Message}";
             return false;
         }
@@ -844,6 +859,7 @@ public partial class BoxBrowserViewModel : ObservableObject, IBoxPager
         }
         catch (Exception error)
         {
+            AppLog.Error("edit", "Move aborted", error);
             Status = $"Move aborted: {error.Message}";
         }
         finally

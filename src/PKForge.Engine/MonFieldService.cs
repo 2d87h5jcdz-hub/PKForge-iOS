@@ -101,7 +101,8 @@ public static class MonFieldService
     private static string[] FormNames(PKM pk)
     {
         var strings = GameInfo.Strings;
-        return FormConverter.GetFormList(pk.Species, strings.Types, strings.forms, GameInfo.GenderSymbolUnicode, pk.Context);
+        var list = FormConverter.GetFormList(pk.Species, strings.Types, strings.forms, GameInfo.GenderSymbolUnicode, pk.Context);
+        return Luminescent.LumiData.IsLumi(pk) ? [.. Luminescent.LumiData.FormList(pk.Species, list, strings.Types, strings.forms)] : list;
     }
 
     /// <summary>The 0/1/2 ability slot; Gen 3-5 read it from their own storage.</summary>
@@ -309,15 +310,29 @@ public static class MonFieldService
     {
         var (engine, pk) = Read(session, box, slot);
         if (pk.Format <= 2) throw new InvalidOperationException("Gen 1/2 shininess comes from the DVs; use the shiny switch.");
-        var changed = kind switch
+        var wasLegal = new LegalityAnalysis(pk).Valid;
+        var shiny = kind switch
         {
-            ShinyKind.None => pk.SetUnshiny(),
-            ShinyKind.Square when pk.Context.IsSquareShinyDifferentiated => pk.SetShiny(Shiny.AlwaysSquare),
-            ShinyKind.Star when pk.Context.IsSquareShinyDifferentiated => pk.SetShiny(Shiny.AlwaysStar),
-            _ => pk.SetShiny(Shiny.Always),
+            ShinyKind.Square when pk.Context.IsSquareShinyDifferentiated => Shiny.AlwaysSquare,
+            ShinyKind.Star when pk.Context.IsSquareShinyDifferentiated => Shiny.AlwaysStar,
+            _ => Shiny.Always,
         };
+        var original = pk.Clone();
+        var changed = kind == ShinyKind.None ? pk.SetUnshiny() : pk.SetShiny(shiny);
         if (!changed) return false;
         if (pk.Format >= 6 && pk.Generation is >= 3 and <= 5) pk.EncryptionConstant = pk.PID;
+        pk.RefreshChecksum();
+        if (wasLegal && !new LegalityAnalysis(pk).Valid)
+        {
+            // The PID is tied to the IVs or the encounter (Gen 3/4 wild, Sword/Shield
+            // overworld): rebuild at the same origin rather than leave it illegal. Kept only
+            // when it is still this trainer's mon, caught where it was.
+            var rebuilt = LegalizerService.LegalizeKeepingOrigin(engine.SaveFile, pk, shiny);
+            if (rebuilt.Species == original.Species && rebuilt.ID32 == original.ID32
+                && rebuilt.MetLocation == original.MetLocation && rebuilt.WasEgg == original.WasEgg
+                && rebuilt.IsShiny == (kind != ShinyKind.None) && new LegalityAnalysis(rebuilt).Valid)
+                pk = rebuilt;
+        }
         Write(engine, box, slot, pk);
         return true;
     }

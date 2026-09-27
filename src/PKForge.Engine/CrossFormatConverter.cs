@@ -165,9 +165,10 @@ public static class CrossFormatConverter
             var trade = LinkTradeLocation(Generation);
             pk.MetLocation = trade;
             warnings.Add($"Met location has no equivalent in {Gen}: recorded as {LocationLabel(trade, egg: false)}.");
-            if (Generation >= 4 && pk.EggLocation != 0)
+            var noEgg = pk is PB8 ? Locations.Default8bNone : (ushort)0;
+            if (Generation >= 4 && pk.EggLocation != noEgg)
             {
-                pk.EggLocation = 0;
+                pk.EggLocation = noEgg;
                 warnings.Add($"Egg location has no equivalent in {Gen} and is cleared.");
             }
             if (pk.MetLevel > pk.CurrentLevel)

@@ -359,6 +359,28 @@ public static class PksmPaint
     }
 
     /// <summary>Bottom hint rail: a device panel carrying cyan key discs and pale labels.</summary>
+    /// <summary>
+    /// Where each prompt of <see cref="HintBar"/> sits (key disc and label, full bar height),
+    /// laid out exactly as it is drawn, so a canvas can make its hint bar tappable.
+    /// </summary>
+    public static IReadOnlyList<SKRect> HintBarHitRects(SKRect bar, IReadOnlyList<(string Key, string Label)> prompts, SKFont font)
+    {
+        var total = 0f;
+        foreach (var (key, label) in prompts)
+            total += Math.Max(font.Size * 1.3f, font.MeasureText(key) + font.Size * 0.9f) + 8 + font.MeasureText(label) + font.Size * 1.4f;
+        var x = bar.MidX - (total - font.Size * 1.4f) / 2;
+        var rects = new List<SKRect>(prompts.Count);
+        foreach (var (key, label) in prompts)
+        {
+            var kw = Math.Max(font.Size * 1.3f, font.MeasureText(key) + font.Size * 0.9f);
+            var width = kw + 8 + font.MeasureText(label);
+            // Half the gap on each side belongs to the prompt: no dead strip between two targets.
+            rects.Add(new SKRect(x - font.Size * 0.7f, bar.Top, x + width + font.Size * 0.7f, bar.Bottom));
+            x += width + font.Size * 1.4f;
+        }
+        return rects;
+    }
+
     public static void HintBar(SKCanvas c, SKRect bar, IReadOnlyList<(string Key, string Label)> prompts, SKFont font)
     {
         Panel(c, SKRect.Inflate(bar, -3, -3));

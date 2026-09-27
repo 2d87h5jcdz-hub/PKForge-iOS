@@ -285,7 +285,8 @@ public sealed record MetInfo(
     int MetLocation, string MetLocationName, int MetLevel, string MetDate, bool SupportsMetDate,
     bool IsEgg, int EggLocation, string EggLocationName, string EggDate, bool SupportsEggDate,
     int Version, string VersionName, int Language, string LanguageName,
-    bool Fateful, int TID, int SID);
+    bool Fateful, int TID, int SID,
+    bool WasEgg = false, bool SupportsWasEgg = false);
 
 /// <summary>A partial met/origin mutation; only non-null fields apply. Dates: null = no change, "" = clear.</summary>
 public sealed record MetEdit(
@@ -299,7 +300,8 @@ public sealed record MetEdit(
     int? Language = null,
     bool? Fateful = null,
     int? TID = null,
-    int? SID = null);
+    int? SID = null,
+    bool? WasEgg = null);
 
 /// <summary>
 /// The potential block of one Pokémon: Tera type (Gen IX), Hyper Training (Gen VII+),

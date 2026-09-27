@@ -812,12 +812,12 @@ public sealed class MonSummaryView : ContentView
         if (s.Met is { } met)
         {
             origin.Add(Fact("Game", met.VersionName.Length > 0 ? met.VersionName : "Unknown"));
-            if (met.EggLocation > 0 && met.EggLocationName.Length > 0)
+            if (met.WasEgg && met.EggLocationName.Length > 0)
                 origin.Add(Fact("Egg", met.EggLocationName, met.EggDate.Length > 0 ? $"Received {met.EggDate}" : null));
-            origin.Add(Fact(met.EggLocation > 0 ? "Hatched" : "Met", met.MetLocationName.Length > 0 ? met.MetLocationName : "—",
+            origin.Add(Fact(met.WasEgg ? "Hatched" : "Met", met.MetLocationName.Length > 0 ? met.MetLocationName : "—",
                 string.Join(" · ", new[]
                 {
-                    met.EggLocation > 0 ? null : met.MetLevel > 0 ? $"at Lv. {met.MetLevel}" : null,
+                    met.WasEgg ? null : met.MetLevel > 0 ? $"at Lv. {met.MetLevel}" : null,
                     met.MetDate.Length > 0 ? met.MetDate : null,
                 }.Where(x => x is not null))));
             if (met.LanguageName.Length > 0) origin.Add(Fact("Language", met.LanguageName));

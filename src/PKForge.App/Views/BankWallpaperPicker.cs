@@ -33,6 +33,7 @@ public sealed class BankWallpaperPicker : IPadPagingHandler
     private int _columns = 6;
     private float _density = 1;
     private readonly List<(SKRect Rect, int Flat)> _hits = [];
+    private (SKRect Rect, PadButton Button)[] _hintHits = [];
 
     public static Task<BankWallpaper?> ShowAsync(Grid host, string title, BankWallpaper current) =>
         new BankWallpaperPicker(host, title, current)._result.Task;
@@ -111,7 +112,14 @@ public sealed class BankWallpaperPicker : IPadPagingHandler
     {
         args.Handled = true;
         if (args.ActionType != SKTouchAction.Released) return;
-        var point = new SKPoint(args.Location.X * _density, args.Location.Y * _density);
+        // Touch locations arrive in canvas pixels, like the tile rects.
+        var point = args.Location;
+        foreach (var (rect, button) in _hintHits)
+        {
+            if (!rect.Contains(point)) continue;
+            OnPadButton(button);
+            return;
+        }
         foreach (var (rect, flat) in _hits)
         {
             if (!rect.Contains(point)) continue;
@@ -191,8 +199,11 @@ public sealed class BankWallpaperPicker : IPadPagingHandler
         }
         canvas.Restore();
 
-        PksmPaint.HintBar(canvas, new SKRect(0, info.Height - hint, info.Width, info.Height),
-            [("A", "Choose"), ("L/R", "Game"), ("B", "Cancel")], small);
+        var hintBar = new SKRect(0, info.Height - hint, info.Width, info.Height);
+        (string, string)[] prompts = [("A", "Choose"), ("R", "Next game"), ("B", "Cancel")];
+        PksmPaint.HintBar(canvas, hintBar, prompts, small);
+        PadButton[] buttons = [PadButton.A, PadButton.R, PadButton.B];
+        _hintHits = [.. PksmPaint.HintBarHitRects(hintBar, prompts, small).Select((r, i) => (r, buttons[i]))];
         _pacer.Continue(!_scroll.Settled);
     }
 }

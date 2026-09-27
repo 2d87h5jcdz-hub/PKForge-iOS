@@ -119,11 +119,11 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         statusHost.Margin = new Thickness(12, 0, 12, 6);
 
         var footer = DsChrome.Footer(
-            ("A", "Grab", null),
+            ("A", "Grab", () => OnPadButton(PadButton.A)),
             ("Y", "Mark", ToggleCursorMark),
             ("X", "Actions", () => _ = ShowBankActionsAsync()),
-            ("B", "Back", null),
-            ("LR", "Box", null),
+            ("B", "Back", () => OnPadButton(PadButton.B)),
+            ("LR", "Box", () => OnPadButton(PadButton.R)),
             // SELECT (-): a dual-screen device turns the inspector's page below; a single
             // screen opens the full-screen summary instead.
             ("-", HasSecondScreen ? "Page" : "Summary", () => OnPadButton(PadButton.Select)),

@@ -142,6 +142,18 @@ public static class SpriteCatalog
     /// names: "sprites/b_*.png" (pixel, normal + shiny) and "artwork/a_*.png" (PKHeX artwork,
     /// no shiny variants). The first one that exists wins.
     /// </summary>
+    /// <summary>Luminescent Platinum forms with bundled icons, and whether they have female art.</summary>
+    private static readonly Dictionary<(int Species, int Form), bool> LumiForms = new()
+    {
+        [(3, 3)] = true,     // Venusaur Clone
+        [(6, 4)] = false,    // Charizard Clone
+        [(9, 3)] = false,    // Blastoise Clone
+        [(25, 17)] = true,   // Pikachu, Lumi form
+        [(94, 3)] = false,   // Gengar Stitched
+        [(95, 1)] = false,   // Onix Crystal
+        [(150, 3)] = false,  // Mewtwo Armor MK2
+    };
+
     public static IReadOnlyList<SpriteCandidate> BundledCandidates(SpriteLook look)
     {
         var (species, form, shiny, t) = (look.Species, look.Form, look.Shiny, look.Traits);
@@ -150,6 +162,15 @@ public static class SpriteCatalog
         void Add(string path, SpriteFidelity fidelity)
         {
             if (!list.Exists(c => c.Path == path)) list.Add(new SpriteCandidate(path, fidelity));
+        }
+
+        // Luminescent Platinum's own forms (Clone, Stitched, Crystal, Armor...): none exists in
+        // the retail games, so these form ids can only mean the Lumi form. Icons by Team Lumi.
+        if (!t.Gigantamax && LumiForms.TryGetValue((species, form), out var lumiGendered))
+        {
+            var female = lumiGendered && t.Female ? "f" : "";
+            if (shiny) Add($"sprites/lumi/b_{species}_L{form}{female}s.png", SpriteFidelity.Exact);
+            Add($"sprites/lumi/b_{species}_L{form}{female}.png", shiny ? SpriteFidelity.ShinyMissing : SpriteFidelity.Exact);
         }
         string B(bool female, bool s, bool fold = true) => $"sprites/b_{FileStem(PkhexName(species, form, female, t.FormArgument, t.Cosplay, s, fold))}.png";
         string A(bool female, bool fold = true) => $"artwork/a_{FileStem(PkhexName(species, form, female, t.FormArgument, t.Cosplay, false, fold))}.png";

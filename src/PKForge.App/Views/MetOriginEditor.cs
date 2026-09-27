@@ -32,7 +32,7 @@ public static class MetOriginEditor
                 options.Add(new(SuggestMet, Glyph: "●", Accent: UiTokens.Blueprint,
                     Detail: "Location, level and date from a legal encounter; the ball too if it no longer fits"));
                 options.Add(new(SuggestBall, Glyph: "●", Accent: UiTokens.Blueprint, Detail: "A ball its encounter allows"));
-                if (m.IsEgg)
+                if (m.IsEgg || m.WasEgg)
                     options.Add(new(SuggestEgg, Glyph: "●", Accent: UiTokens.Blueprint, Detail: "The egg location and date its origin expects"));
             }
             options.AddRange(new PadOption[]
@@ -41,9 +41,10 @@ public static class MetOriginEditor
                 new($"Met location · {m.MetLocationName}"),
                 new($"Met level · {m.MetLevel}"),
                 new($"Met date · {(m.MetDate.Length == 0 ? "unset" : m.MetDate)}"),
-                new($"Hatched from egg · {(m.IsEgg ? "yes" : "no")}"),
             });
-            if (m.IsEgg)
+            if (m.SupportsWasEgg && !m.IsEgg)
+                options.Add(new($"Hatched from egg · {(m.WasEgg ? "yes" : "no")}"));
+            if (m.IsEgg || m.WasEgg)
             {
                 options.Add(new($"Egg location · {m.EggLocationName}"));
                 options.Add(new($"Egg date · {(m.EggDate.Length == 0 ? "unset" : m.EggDate)}"));
@@ -82,7 +83,7 @@ public static class MetOriginEditor
             }
             else if (choice.StartsWith("Hatched from egg", StringComparison.Ordinal))
             {
-                session.ApplyMetEdit(box, slot, new MetEdit(IsEgg: !m.IsEgg));
+                session.ApplyMetEdit(box, slot, new MetEdit(WasEgg: !m.WasEgg));
                 dirty = true;
             }
             else if (choice.StartsWith("Egg location", StringComparison.Ordinal))
@@ -197,7 +198,7 @@ internal sealed class EditorMenu : IPadHandler
             });
         }
         content.Children.Add(grid);
-        content.Children.Add(Kit.WindowHints(("A", "Choose", null), ("B", "Cancel", () => Close(null))));
+        content.Children.Add(Kit.WindowHints(("A", "Choose", () => OnPadButton(PadButton.A)), ("B", "Cancel", () => Close(null))));
 
         var window = Kit.OverlayWindow(host, content, preferredMaxWidth: 460);
         _overlay = Kit.AttachOverlay(host, window, () => Close(null));

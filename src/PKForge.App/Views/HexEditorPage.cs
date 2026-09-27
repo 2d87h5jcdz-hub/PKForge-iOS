@@ -80,11 +80,11 @@ public sealed class HexEditorPage : IPadHandler
         _canvas.Touch += Touch;
 
         View hints = Kit.WindowHints(
-            ("A", "Edit", null),
+            ("A", "Edit", () => OnPadButton(PadButton.A)),
             ("B", "Done", () => _ = CloseAsync()),
             ("X", "Actions", () => _ = ShowActionsAsync()),
             ("Y", "Jump", () => _ = JumpAsync()),
-            ("LR", "Page", null));
+            ("LR", "Page", () => OnPadButton(PadButton.R)));
 
         var content = new Grid
         {

@@ -1,6 +1,7 @@
 // Builds the offline sprite pack archive the app downloads in one request.
 //
 //   dotnet run --project tools/SpritePack -- <output-dir> [<staging-dir>]
+//   dotnet run --project tools/SpritePack -- bdsp <output-dir>   (the BDSP-style icon add-on)
 //
 // Every file comes from PKForge.Domain.SpritePack.Entries, the same list the app's per-file
 // fallback reads, so names always match the on-device caches. Files are staged on disk first
@@ -15,11 +16,13 @@ using System.Net;
 using System.Security.Cryptography;
 using PKForge.Domain;
 using PKHeX.Core;
-using SkiaSharp;
+
+if (args is ["bdsp", var bdspOutput])
+    return await BdspPack.BuildAsync(Path.GetFullPath(bdspOutput));
 
 if (args.Length is < 1 or > 2)
 {
-    Console.Error.WriteLine("usage: SpritePack <output-dir> [<staging-dir>]");
+    Console.Error.WriteLine("usage: SpritePack <output-dir> [<staging-dir>]\n       SpritePack bdsp <output-dir>");
     return 2;
 }
 
@@ -64,7 +67,7 @@ using (var zip = ZipFile.Open(temporary, ZipArchiveMode.Create))
         if (!SpritePack.IsSafeEntryName(entry.CachePath))
             throw new InvalidOperationException($"Unsafe pack name: {entry.CachePath}");
         var home = entry.CachePath.StartsWith("home/", StringComparison.Ordinal);
-        var bytes = home ? LosslessWebp(path) : await File.ReadAllBytesAsync(path);
+        var bytes = home ? Images.LosslessWebp(await File.ReadAllBytesAsync(path), path) : await File.ReadAllBytesAsync(path);
         // WebP is already entropy coded; GIF still gains a little from deflate.
         var item = zip.CreateEntry(entry.CachePath, home ? CompressionLevel.NoCompression : CompressionLevel.SmallestSize);
         item.LastWriteTime = new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -82,40 +85,6 @@ Console.WriteLine($"archive: {archive}");
 Console.WriteLine($"bytes:   {stream.Length}");
 Console.WriteLine($"sha256:  {hash}");
 return 0;
-
-// Checked on the unpremultiplied pixels: every visible pixel (alpha > 0) must come back
-// exactly. Lossless WebP drops the color hidden under fully transparent pixels, which is
-// never drawn. (A premultiplied compare is not meaningful: Skia's PNG and WebP decoders
-// round the premultiply step differently.)
-static byte[] LosslessWebp(string pngPath)
-{
-    var png = File.ReadAllBytes(pngPath);
-    using var source = Decode(png);
-    using var data = source.PeekPixels().Encode(new SKWebpEncoderOptions(SKWebpEncoderCompression.Lossless, 100))
-        ?? throw new InvalidOperationException($"WebP encoding failed: {pngPath}");
-    var webp = data.ToArray();
-    using var roundTrip = Decode(webp);
-    var a = source.GetPixelSpan();
-    var b = roundTrip.GetPixelSpan();
-    if (a.Length != b.Length) throw new InvalidOperationException($"WebP size differs: {pngPath}");
-    for (var i = 0; i < a.Length; i += 4)
-    {
-        if (a[i + 3] == 0 && b[i + 3] == 0) continue;
-        if (!a.Slice(i, 4).SequenceEqual(b.Slice(i, 4)))
-            throw new InvalidOperationException($"WebP changes pixel {i / 4}: {pngPath}");
-    }
-    return webp;
-}
-
-static SKBitmap Decode(byte[] bytes)
-{
-    using var codec = SKCodec.Create(new SKMemoryStream(bytes)) ?? throw new InvalidDataException("Unreadable image.");
-    var info = codec.Info.WithColorType(SKColorType.Rgba8888).WithAlphaType(SKAlphaType.Unpremul);
-    var bitmap = new SKBitmap(info);
-    if (codec.GetPixels(info, bitmap.GetPixels()) != SKCodecResult.Success)
-        throw new InvalidDataException("Image decode failed.");
-    return bitmap;
-}
 
 static async Task<bool> FetchAsync(HttpClient http, string url, string path, CancellationToken token)
 {

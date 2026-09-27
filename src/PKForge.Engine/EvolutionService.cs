@@ -64,11 +64,20 @@ public sealed class EvolutionService : IEvolutionService
             return new GenerationOutcome(false, "That evolution is no longer available.");
         var candidate = candidates[request.OptionId];
         var option = Describe(sav, original, candidate, request.OptionId, request.Hax);
+        var start = original;
+        var bagFree = false;
+        if (!option.Available && request.MeetCondition
+            && Meet(sav, original, candidate, Strings.Value.GetItemStrings(original.Context, original.Version)) is { } met)
+        {
+            start = met.Prepared;
+            bagFree = met.BagFree;
+            option = Describe(sav, start, candidate, request.OptionId, request.Hax, bagFree);
+        }
         if (!option.Available)
             return new GenerationOutcome(false, option.BlockedReason ?? "That evolution is not possible right now.");
 
         var fromName = SpeciesName(original.Species);
-        var pk = original.Clone();
+        var pk = start.Clone();
         Apply(sav, pk, candidate, box == -1 || pk.PartyStatsPresent);
         if (candidate.Method.Method.IsTrade)
             RecordTrade(sav, pk, request.TradePartnerName);
@@ -78,9 +87,12 @@ public sealed class EvolutionService : IEvolutionService
         if (IsHeldItemConsumed(candidate.Method.Method)) pk.HeldItem = 0;
         if (candidate.Method.Method is EvolutionType.UseItem or EvolutionType.UseItemMale or EvolutionType.UseItemFemale
             or EvolutionType.UseItemWormhole or EvolutionType.UseItemFullMoon)
-            TryConsumeBagItem(sav, candidate.Method.Argument);
+            if (!bagFree) TryConsumeBagItem(sav, candidate.Method.Argument);
 
         pk.RefreshChecksum();
+        // Meeting the condition must not cost legality: a legal Pokémon stays legal.
+        if (start != original && new LegalityAnalysis(original).Valid && !new LegalityAnalysis(pk).Valid)
+            return new GenerationOutcome(false, "Meeting the condition would make it illegal here, so nothing was changed.");
         if (box == -1) sav.SetPartySlotAtIndex(pk, slot, DexOnly);
         else sav.SetBoxSlotAtIndex(pk, box, slot, DexOnly);
 
@@ -118,14 +130,24 @@ public sealed class EvolutionService : IEvolutionService
 
     // ── Describe (the card) ──────────────────────────────────────────────────
 
-    private static EvolutionOption Describe(SaveFile sav, PKM pk, Candidate c, int id, bool hax)
+    private static EvolutionOption Describe(SaveFile sav, PKM pk, Candidate c, int id, bool hax, bool bagFree = false)
     {
         var method = c.Method;
         var trigger = TriggerOf(method.Method);
         var items = Strings.Value.GetItemStrings(pk.Context, pk.Version);
         var itemName = ItemName(items, method.Argument);
-        var (met, unmetReason) = Condition(sav, pk, c, items);
+        var (met, unmetReason) = Condition(sav, pk, c, items, bagFree);
         var available = met || hax;
+
+        // Not met, but PKForge can meet it: show the evolution as it would happen after the
+        // changes (level, moves, stats), still marked as not met until the player asks.
+        if (!available && Meet(sav, pk, c, items) is { } meet)
+        {
+            var after = Describe(sav, meet.Prepared, c, id, hax, meet.BagFree);
+            if (after.Available)
+                return after with { Requirement = Requirement(pk, method, items), ConditionMet = false, Available = false,
+                    BlockedReason = unmetReason, StatsBefore = StatsOf(pk), MeetCondition = meet.Description };
+        }
 
         var preview = pk.Clone();
         Apply(sav, preview, c, recomputeStats: true);
@@ -229,7 +251,7 @@ public sealed class EvolutionService : IEvolutionService
 
     /// <summary>Is the requirement satisfied right now? Trades always are (the partner is simulated);
     /// methods PKForge cannot observe (places, weather, counters) are never "met" - HaX only.</summary>
-    private static (bool Met, string? Reason) Condition(SaveFile sav, PKM pk, Candidate c, string[] items)
+    private static (bool Met, string? Reason) Condition(SaveFile sav, PKM pk, Candidate c, string[] items, bool bagFree = false)
     {
         var m = c.Method;
         var held = ItemName(items, pk.HeldItem);
@@ -247,7 +269,7 @@ public sealed class EvolutionService : IEvolutionService
             case EvolutionType.UseItem or EvolutionType.UseItemMale or EvolutionType.UseItemFemale:
                 if (m.Check(pk, pk.CurrentLevel, pk.CurrentLevel, false, EvolutionRuleTweak.Default) != EvolutionCheckResult.Valid)
                     return (false, "This one's gender can't evolve that way.");
-                return BagCount(sav, m.Argument) > 0
+                return bagFree || BagCount(sav, m.Argument) > 0
                     ? (true, null)
                     : (false, $"You need {ItemName(items, m.Argument)} in your bag, or turn on HaX mode.");
             case EvolutionType.LevelUpFriendship or EvolutionType.LevelUpFriendshipMorning or EvolutionType.LevelUpFriendshipNight:
@@ -292,6 +314,142 @@ public sealed class EvolutionService : IEvolutionService
             EvolutionCheckResult.WrongEC or EvolutionCheckResult.BadForm => (false, "Its personality decides a different evolution."),
             _ => (false, "The game's condition isn't met."),
         };
+    }
+
+    // ── Meet the condition ───────────────────────────────────────────────────
+
+    internal sealed record Met(PKM Prepared, string Description, bool BagFree);
+
+    /// <summary>
+    /// What PKForge changes so the game's own condition holds, the way a player would get
+    /// there: raise the level (or level it once), raise friendship, give the held item, take
+    /// off an Everstone, teach the move, use an item without one in the bag. Null when that is
+    /// not enough (gender, personality, stats, places, counters) or when a legal Pokémon would
+    /// stop being legal.
+    /// </summary>
+    internal static Met? Meet(SaveFile sav, PKM pk, Candidate c, string[] items)
+    {
+        var m = c.Method;
+        var prepared = pk.Clone();
+        var steps = new List<string>();
+        var bagFree = false;
+
+        if (m.Method.IsTrade)
+        {
+            if (m.Method == EvolutionType.TradeHeldItem ? prepared.HeldItem != m.Argument : ItemName(items, prepared.HeldItem) == "Everstone")
+            {
+                if (!Give(sav, prepared, m.Method == EvolutionType.TradeHeldItem ? m.Argument : (ushort)0, items, steps)) return null;
+            }
+        }
+        else
+        {
+            switch (m.Method)
+            {
+                case EvolutionType.UseItem or EvolutionType.UseItemMale or EvolutionType.UseItemFemale:
+                    if (BagCount(sav, m.Argument) == 0)
+                    {
+                        bagFree = true;
+                        steps.Add($"Uses {ItemName(items, m.Argument)} without taking one from your bag");
+                    }
+                    break;
+                case EvolutionType.LevelUpFriendship or EvolutionType.LevelUpFriendshipMorning or EvolutionType.LevelUpFriendshipNight:
+                {
+                    var threshold = pk.Format >= 8 ? 160 : 220;
+                    if (prepared.CurrentFriendship < threshold)
+                    {
+                        prepared.CurrentFriendship = (byte)threshold;
+                        steps.Add($"Raises friendship to {threshold}");
+                    }
+                    break;
+                }
+                case EvolutionType.LevelUpHeldItemDay or EvolutionType.LevelUpHeldItemNight:
+                    if (prepared.HeldItem != m.Argument && !Give(sav, prepared, m.Argument, items, steps)) return null;
+                    break;
+                case EvolutionType.LevelUpKnowMove:
+                    if (!prepared.HasMove(m.Argument))
+                    {
+                        if (Teach(sav, prepared, m.Argument, steps) is not { } taught) return null;
+                        prepared = taught;
+                    }
+                    break;
+            }
+            if (m.Method is not (EvolutionType.UseItem or EvolutionType.UseItemMale or EvolutionType.UseItemFemale))
+                RaiseLevel(prepared, m, steps);
+        }
+
+        prepared.RefreshChecksum();
+        if (steps.Count == 0 || !Condition(sav, prepared, c, items, bagFree).Met) return null;
+        if (new LegalityAnalysis(pk).Valid && !new LegalityAnalysis(prepared).Valid) return null;
+        return new Met(prepared, string.Join(", ", steps), bagFree);
+    }
+
+    /// <summary>Level it to the evolution level, or once when it evolves on its next level-up.</summary>
+    private static void RaiseLevel(PKM pk, EvolutionMethod m, List<string> steps)
+    {
+        var levelMin = pk.Format <= 2 ? (byte)1 : pk.MetLevel;
+        if (m.Check(pk, pk.CurrentLevel, levelMin, false, EvolutionRuleTweak.Default) != EvolutionCheckResult.InsufficientLevel) return;
+        var target = m.Level > pk.CurrentLevel ? m.Level : pk.CurrentLevel + 1;
+        if (target > 100) return;
+        SetLevel(pk, (byte)target);
+        steps.Add($"Raises it to Lv. {target}");
+    }
+
+    private static void SetLevel(PKM pk, byte level)
+    {
+        pk.CurrentLevel = level;
+        if (pk.PartyStatsPresent || pk.Format <= 2) pk.ResetPartyStats();
+    }
+
+    /// <summary>Gives the item to hold (0 takes it off); refused when the game has no such item.</summary>
+    private static bool Give(SaveFile sav, PKM pk, ushort item, string[] items, List<string> steps)
+    {
+        if (item > sav.MaxItemID) return false;
+        var old = pk.HeldItem;
+        pk.HeldItem = item;
+        steps.Add(item == 0 ? $"Takes off its {ItemName(items, old)}"
+            : old == 0 ? $"Gives it {ItemName(items, item)} to hold"
+            : $"Gives it {ItemName(items, item)} to hold instead of {ItemName(items, old)}");
+        return true;
+    }
+
+    /// <summary>
+    /// Teaches the move in a free slot (else in place of the last one), first at the current
+    /// level, then at the level its learnset teaches it; kept only when the moveset stays legal.
+    /// </summary>
+    private static PKM? Teach(SaveFile sav, PKM pk, ushort move, List<string> steps)
+    {
+        var moves = new ushort[4];
+        pk.GetMoves(moves);
+        var slot = Array.IndexOf(moves, (ushort)0);
+        if (slot < 0) slot = 3;
+        var replaced = moves[slot];
+
+        var levels = new List<byte> { pk.CurrentLevel };
+        try
+        {
+            var learnset = GameData.GetLearnSource(sav.Version).GetLearnset(pk.Species, pk.Form);
+            var all = learnset.GetAllMoves();
+            var at = learnset.GetAllLevels();
+            for (var i = 0; i < all.Length && i < at.Length; i++)
+                if (all[i] == move && at[i] > pk.CurrentLevel) levels.Add(at[i]);
+        }
+        catch (Exception e) when (e is ArgumentOutOfRangeException or InvalidOperationException or IndexOutOfRangeException) { }
+
+        var wasLegal = new LegalityAnalysis(pk).Valid;
+        foreach (var level in levels.Distinct().Where(l => l <= 100))
+        {
+            var trial = pk.Clone();
+            if (level != trial.CurrentLevel) SetLevel(trial, level);
+            moves[slot] = move;
+            trial.SetMoves(moves);
+            trial.HealPP();
+            trial.RefreshChecksum();
+            if (wasLegal && !new LegalityAnalysis(trial).Valid) continue;
+            if (level > levels[0]) steps.Add($"Raises it to Lv. {level}");
+            steps.Add(replaced == 0 ? $"Teaches it {MoveName(move)}" : $"Teaches it {MoveName(move)} in place of {MoveName(replaced)}");
+            return trial;
+        }
+        return null;
     }
 
     // ── Apply ────────────────────────────────────────────────────────────────

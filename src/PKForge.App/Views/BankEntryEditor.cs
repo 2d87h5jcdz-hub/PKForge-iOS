@@ -304,7 +304,7 @@ public static class BankEntryEditor
             Grid.SetRow(actions, 2);
             content.Add(fieldActions);
             Grid.SetRow(fieldActions, 3);
-            var hints = Kit.WindowHints(("A", "Open", null), ("X", "Save", () => Run(SaveAsync)), ("B", "Close", RequestClose));
+            var hints = Kit.WindowHints(("A", "Open", () => OnPadButton(PadButton.A)), ("X", "Save", () => Run(SaveAsync)), ("B", "Close", RequestClose));
             content.Add(hints);
             Grid.SetRow(hints, 4);
 

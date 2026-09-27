@@ -52,7 +52,7 @@ public sealed class EvolutionCard : IPadHandler
         if (option is null) return null;
         var moves = await AskMovesAsync(host, plan, option);
         if (moves is null) return null;
-        return new EvolutionRequest(option.Id, moves, hax);
+        return new EvolutionRequest(option.Id, moves, hax, MeetCondition: CanMeet(option));
     }
 
     /// <summary>The games' "trying to learn" dialogue: a free slot just asks; a full moveset
@@ -165,7 +165,7 @@ public sealed class EvolutionCard : IPadHandler
         content.Children.Add(_changes);
         content.Children.Add(buttons);
         content.Children.Add(Kit.WindowHints(
-            ("◀▶", "Branch", null),
+            ("◀▶", "Branch", () => OnPadButton(PadButton.Right)),
             ("A", "Evolve", Confirm),
             ("B", "Cancel", () => Close(null))));
 
@@ -177,6 +177,9 @@ public sealed class EvolutionCard : IPadHandler
     }
 
     private EvolutionOption Current => _plan.Options[_index];
+
+    /// <summary>Not met, but PKForge can meet it legally: "Meet &amp; evolve" makes the changes first.</summary>
+    private static bool CanMeet(EvolutionOption option) => !option.Available && option.MeetCondition is not null;
 
     private void Select(int index)
     {
@@ -192,17 +195,21 @@ public sealed class EvolutionCard : IPadHandler
             : UiTokens.Ink1);
         (_status.Text, _status.TextColor) = option switch
         {
+            _ when CanMeet(option) => ($"Not met yet: {option.BlockedReason} Meet & evolve takes care of it.", UiTokens.RedOrange),
             { Available: false } => (option.BlockedReason ?? "Not possible right now.", UiTokens.GiftRed),
             { IsTrade: true } => ("No second console needed: PKForge performs the link trade for you.", UiTokens.Ink1),
             { ConditionMet: false } => ("HaX: the game's requirement is not met; evolving anyway.", UiTokens.RedOrange),
             _ => ("The requirement is met.", UiTokens.Green),
         };
-        _evolve.IsEnabled = option.Available;
-        _evolve.Opacity = option.Available ? 1 : 0.45;
+        var canGo = option.Available || CanMeet(option);
+        _evolve.Text = CanMeet(option) ? "Meet & evolve" : "Evolve";
+        _evolve.IsEnabled = canGo;
+        _evolve.Opacity = canGo ? 1 : 0.45;
 
         _changes.Children.Clear();
         _changes.Children.Add(StatGrid(option));
         var lines = new List<(string Caption, string Text, Color Tone)>();
+        if (CanMeet(option)) lines.Add(("FIRST", option.MeetCondition!, UiTokens.RedOrange));
         if (option.AbilityBefore != "—")
             lines.Add(("ABILITY", option.AbilityBefore == option.AbilityAfter ? option.AbilityAfter : $"{option.AbilityBefore} → {option.AbilityAfter}", UiTokens.Ink0));
         lines.Add(("NAME", option.NewNickname is { } nick ? $"Becomes {nick}" : $"Keeps the nickname {_plan.Nickname}", UiTokens.Ink0));
@@ -325,7 +332,7 @@ public sealed class EvolutionCard : IPadHandler
 
     private void Confirm()
     {
-        if (!Current.Available) return;
+        if (!Current.Available && !CanMeet(Current)) return;
         Close(Current);
     }
 

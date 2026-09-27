@@ -41,11 +41,12 @@ public static class BulkBoxActions
             if (keepLegal && wasLegal && !new LegalityAnalysis(candidate).Valid)
             {
                 // A rebuild is a shiny toggle only when it stays this trainer's mon of this
-                // species; Auto-Legality may otherwise answer with a different origin
-                // (a shiny event gift under the event's OT), which is a replacement.
-                var rebuilt = save.Legalize(candidate);
+                // species, from the same origin; Auto-Legality may otherwise answer with a
+                // shiny event gift under the event's OT, or an egg, which is a replacement.
+                var rebuilt = LegalizerService.LegalizeKeepingOrigin(save, candidate);
                 var sameMon = rebuilt.Species == pk.Species && rebuilt.ID32 == pk.ID32
-                    && rebuilt.OriginalTrainerName == pk.OriginalTrainerName;
+                    && rebuilt.OriginalTrainerName == pk.OriginalTrainerName
+                    && rebuilt.WasEgg == pk.WasEgg && rebuilt.MetLocation == pk.MetLocation;
                 candidate = sameMon && rebuilt.IsShiny == shiny && new LegalityAnalysis(rebuilt).Valid ? rebuilt : null;
             }
             if (candidate is null || candidate.IsShiny != shiny)

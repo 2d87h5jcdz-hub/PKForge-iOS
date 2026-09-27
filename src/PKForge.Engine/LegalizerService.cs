@@ -142,15 +142,150 @@ public sealed class LegalizerService : ILegalizerService
         if (new LegalityAnalysis(current).Valid)
             return new GenerationOutcome(true, "Already legal.");
 
-        var repaired = save.Legalize(current);
-        if (!new LegalityAnalysis(repaired).Valid)
+        var repaired = LegalizeKeepingOrigin(save, current);
+        if (repaired.Species != current.Species || !new LegalityAnalysis(repaired).Valid)
             return new GenerationOutcome(false, "Could not find a legal repair for this mon.");
 
         if (box == -1)
             save.SetPartySlotAtIndex(repaired, slot, EntityImportSettings.None);
         else
             save.SetBoxSlotAtIndex(repaired, box, slot, EntityImportSettings.None);
-        return new GenerationOutcome(true, "Legalized.");
+        return new GenerationOutcome(true, OriginNote(current, repaired) is { } note ? $"Legalized. {note}" : "Legalized.");
+    }
+
+    /// <summary>
+    /// Auto-Legality, told to keep where the Pokémon came from. It was handed no analysis of
+    /// the current Pokémon, so its own "try the original encounter first" step never ran, and
+    /// it tries eggs before every other encounter: eggs allow any PID, so a caught shiny came
+    /// back hatched. A Pokémon that was not an egg now tries its original catch encounter,
+    /// then wild, static, trade and event ones, and eggs last; its ball stays when still legal.
+    /// </summary>
+    /// <summary>
+    /// Encounter order for making or repairing a Pokémon: a catch (wild or static) first,
+    /// then an egg, and only then events and in-game trades, which carry another trainer.
+    /// Auto-Legality's default puts eggs first, and an egg fits almost any request.
+    /// </summary>
+    private static readonly EncounterTypeGroup[] CatchesFirst =
+        [EncounterTypeGroup.Slot, EncounterTypeGroup.Static, EncounterTypeGroup.Egg, EncounterTypeGroup.Mystery, EncounterTypeGroup.Trade];
+
+    internal static PKM LegalizeKeepingOrigin(SaveFile save, PKM current, Shiny shinyKind = Shiny.Always)
+    {
+        var analysis = new LegalityAnalysis(current);
+        if (current.IsEgg || current.WasEgg)
+            return save.Legalize(current.Clone(), analysis);
+        if (RegenerateAtOrigin(save, current, analysis, shinyKind) is { } atOrigin)
+            return atOrigin;
+        // The analysis's best match for a broken caught Pokémon is often an egg (eggs fit any
+        // PID): handing it over would put the egg first. Only a real catch leads the search.
+        var lead = analysis.EncounterOriginal is IEncounterEgg ? null : analysis;
+
+        PKM repaired;
+        lock (TrainerGenerationLock)
+        {
+            var previous = EncounterMovesetGenerator.PriorityList;
+            try
+            {
+                EncounterMovesetGenerator.PriorityList =
+                    CatchesFirst;
+                repaired = save.Legalize(current.Clone(), lead); // Legalize rewrites the mon it is given
+            }
+            finally { EncounterMovesetGenerator.PriorityList = previous; }
+        }
+
+        if (repaired.Ball != current.Ball)
+        {
+            var withBall = repaired.Clone();
+            withBall.Ball = current.Ball;
+            withBall.RefreshChecksum();
+            if (new LegalityAnalysis(withBall).Valid) repaired = withBall;
+        }
+        return repaired;
+    }
+
+    /// <summary>
+    /// Rebuilds the Pokémon from an encounter at its own met location and game, keeping what
+    /// the player asked for (shiny, gender, nature) and, where still legal, its ball, level,
+    /// moves and nickname. Auto-Legality walks every encounter of the species first and ran
+    /// out of time before reaching the right place; this goes straight there. Null when no
+    /// encounter there yields a legal Pokémon.
+    /// </summary>
+    private static PKM? RegenerateAtOrigin(SaveFile save, PKM current, LegalityAnalysis analysis, Shiny shinyKind)
+    {
+        if (current.MetLocation == 0) return null;
+        // Only the moves it can really know: an unlearnable one would rule out every encounter.
+        var moves = new[] { current.Move1, current.Move2, current.Move3, current.Move4 }
+            .Where((m, i) => m != 0 && analysis.Info.Moves[i].Valid).ToArray();
+        return RegenerateAtOrigin(save, current, moves, shinyKind)
+            ?? (moves.Length > 0 ? RegenerateAtOrigin(save, current, [], shinyKind) : null);
+    }
+
+    private static PKM? RegenerateAtOrigin(SaveFile save, PKM current, ushort[] moves, Shiny shinyKind)
+    {
+        var template = current.Clone();
+        var here = EncounterMovesetGenerator.GenerateEncounters(template, save, moves, current.Version)
+            .Where(e => e is not IEncounterEgg && e is ILocation l && l.Location == current.MetLocation)
+            .Take(32);
+        var criteria = new EncounterCriteria
+        {
+            Shiny = current.IsShiny ? shinyKind : Shiny.Never,
+            Gender = current.Gender is 0 or 1 ? (Gender)current.Gender : Gender.Random,
+            Nature = current.Nature,
+        };
+        foreach (var encounter in here)
+        {
+            PKM made;
+            try { made = encounter.ConvertToPKM(save, criteria); }
+            catch (ArgumentException) { continue; }
+            // Sword/Shield overworld catches derive the PID from a seed and the generator
+            // ignores the shiny request: search for a seed that gives the asked shininess.
+            if (!IsShinyAsAsked(made, current.IsShiny, shinyKind) && made is PK8 pk8
+                && encounter is EncounterSlot8 slot8 && slot8.GetRequirement(pk8) == OverworldCorrelation8Requirement.MustHave)
+                Overworld8RNG.ApplyDetails(pk8, criteria, current.IsShiny ? shinyKind : Shiny.Never);
+
+            // Some generators (Gen 5 wild slots) ignore the shiny request; set it afterwards.
+            // Each try rolls a new PID, and only some meet the origin's PID rules.
+            for (var tries = 0; tries < 64 && !IsShinyAsAsked(made, current.IsShiny, shinyKind); tries++)
+                made = TryKeep(made, pk => { if (current.IsShiny) pk.SetShiny(shinyKind); else pk.SetUnshiny(); });
+            if (!IsShinyAsAsked(made, current.IsShiny, shinyKind) || !new LegalityAnalysis(made).Valid) continue;
+
+            // Put back what the player chose wherever the result stays legal.
+            made = TryKeep(made, pk => pk.Ball = current.Ball);
+            if (current.CurrentLevel > made.CurrentLevel) made = TryKeep(made, pk => { pk.CurrentLevel = current.CurrentLevel; pk.ResetPartyStats(); });
+            if (moves.Length > 0) made = TryKeep(made, pk => { pk.SetMoves(moves); pk.HealPP(); });
+            if (current.IsNicknamed) made = TryKeep(made, pk => { pk.IsNicknamed = true; pk.Nickname = current.Nickname; });
+            return made;
+        }
+        return null;
+    }
+
+    private static bool IsShinyAsAsked(PKM pk, bool shiny, Shiny kind) => !shiny ? !pk.IsShiny : kind switch
+    {
+        Shiny.AlwaysSquare => pk.ShinyXor == 0,
+        Shiny.AlwaysStar => pk.IsShiny && pk.ShinyXor != 0,
+        _ => pk.IsShiny,
+    };
+
+    /// <summary>
+    /// <paramref name="change"/> applied to a copy, returned only if it stays legal; otherwise
+    /// the Pokémon as it was. The copy itself is kept, so a random change (a new PID) is the
+    /// one that was checked.
+    /// </summary>
+    private static PKM TryKeep(PKM pk, Action<PKM> change)
+    {
+        var trial = pk.Clone();
+        change(trial);
+        trial.RefreshChecksum();
+        return new LegalityAnalysis(trial).Valid ? trial : pk;
+    }
+
+    /// <summary>Says so when the only legal repair had to change the origin, so it is never a surprise.</summary>
+    private static string? OriginNote(PKM before, PKM after)
+    {
+        if (!before.IsEgg && !before.WasEgg && (after.WasEgg || after.IsEgg))
+            return "No legal version keeps its catch origin, so it is now hatched from an egg.";
+        if (before.MetLocation != after.MetLocation && !after.WasEgg)
+            return "Its met location changed to one where it can legally appear.";
+        return null;
     }
 
     public GenerationOutcome LegalizeSlots(ISaveEngineSession session, IReadOnlyList<(int Box, int Slot)> slots,
@@ -171,8 +306,8 @@ public sealed class LegalizerService : ILegalizerService
             var current = box == -1 ? save.GetPartySlotAtIndex(slot) : save.GetBoxSlotAtIndex(box, slot);
             if (current.Species != 0 && !new LegalityAnalysis(current).Valid)
             {
-                var candidate = save.Legalize(current);
-                if (new LegalityAnalysis(candidate).Valid)
+                var candidate = LegalizeKeepingOrigin(save, current);
+                if (candidate.Species == current.Species && new LegalityAnalysis(candidate).Valid)
                 {
                     if (box == -1)
                         save.SetPartySlotAtIndex(candidate, slot, EntityImportSettings.None);
@@ -337,9 +472,16 @@ public sealed class LegalizerService : ILegalizerService
                 : save;
             var previousPriority = APILegality.GameVersionPriority;
             var previousOrder = APILegality.PriorityOrder;
+            var previousGroups = EncounterMovesetGenerator.PriorityList;
             var useOwner = _ownershipSettings?.UseCurrentTrainerForGeneration ?? true;
             try
             {
+                // Auto-Legality tries eggs first, and an egg fits any request (any PID, any
+                // shiny), so every generated Pokémon came out hatched. A created Pokémon is
+                // looked for as a catch, a gift or a trade first; eggs only when nothing else fits.
+                EncounterMovesetGenerator.PriorityList =
+                    CatchesFirst;
+
                 if (save is SAV8BSLuminescent)
                     return generationSave.GetLegalFromSet(set);
 
@@ -385,6 +527,7 @@ public sealed class LegalizerService : ILegalizerService
             {
                 APILegality.GameVersionPriority = previousPriority;
                 APILegality.PriorityOrder = previousOrder;
+                EncounterMovesetGenerator.PriorityList = previousGroups;
             }
         }
     }

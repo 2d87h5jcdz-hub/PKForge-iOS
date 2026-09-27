@@ -110,7 +110,15 @@ public sealed class SecondScreenBoxPage : ContentPage
                     return built;
             }
         }
+        // The lower screen is a companion: whatever goes wrong there turns it off for the
+        // session (logged) and never takes the app down with it.
         async void ShowBoxSummary(Domain.EntityDetail detail)
+        {
+            try { await ShowBoxSummaryCore(detail); }
+            catch (Exception error) { LowerScreenFailed("box summary", error); }
+        }
+
+        async Task ShowBoxSummaryCore(Domain.EntityDetail detail)
         {
             var session = sessions?.CurrentSession;
             var box = detail.Box == -1 ? "PARTY" : $"BOX {detail.Box + 1:00}";
@@ -137,6 +145,12 @@ public sealed class SecondScreenBoxPage : ContentPage
         // each owner reads only its own payload, so leaving a surface can never leave its
         // content behind.
         async void SwapAsync()
+        {
+            try { await SwapCoreAsync(); }
+            catch (Exception error) { LowerScreenFailed("swap", error); }
+        }
+
+        async Task SwapCoreAsync()
         {
             var swapWatch = System.Diagnostics.Stopwatch.StartNew();
             var owner = state?.Owner ?? SecondScreenOwner.Box;
@@ -216,6 +230,17 @@ public sealed class SecondScreenBoxPage : ContentPage
                 else QueueSwap();
             };
             state.PropertyChanged += _secondScreenHandler;
+        }
+    }
+
+    private static void LowerScreenFailed(string what, Exception error)
+    {
+        SecondScreenMode.DisableForSession($"the lower screen's {what} failed", error);
+        var host = IPlatformApplication.Current?.Services.GetService<ISecondaryDisplayHost>();
+        try { _ = host?.DismissAsync(); }
+        catch (Exception dismiss) when (dismiss is InvalidOperationException or Java.Lang.Exception)
+        {
+            AppLog.Error("second", "Dismissing the lower screen failed", dismiss);
         }
     }
 

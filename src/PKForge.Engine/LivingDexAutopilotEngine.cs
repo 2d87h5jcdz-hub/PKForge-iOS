@@ -24,6 +24,17 @@ public static class LivingDexCatalogBuilder
         return (species, form) => species > 0 && species <= max && personal.IsPresentInGame((ushort)species, (byte)form);
     }
 
+    private static readonly Lazy<GameStrings> Strings = new(() => GameInfo.GetStrings("en"));
+
+    /// <summary>A collectible form's name ("Alola", "Sandy Cloak"...), "" for the base form or when unnamed.</summary>
+    public static string FormName(int species, int form)
+    {
+        if (form == 0 || species <= 0) return "";
+        var strings = Strings.Value;
+        var names = FormConverter.GetFormList((ushort)species, strings.Types, strings.forms, GameInfo.GenderSymbolUnicode, EntityContext.Gen9);
+        return form < names.Length ? names[form] : $"Form {form}";
+    }
+
     private static LivingDexCatalog BuildCore()
     {
         var names = GameInfo.GetStrings("en").specieslist;
