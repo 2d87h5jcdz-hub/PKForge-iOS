@@ -1,10 +1,11 @@
 <p align="center"><img src="docs/images/logo-transparent.png" alt="PKForge" width="140" /></p>
 
-<p align="center"><b>A Pokémon save editor and bank for Android, support dual-screen handhelds.</b></p>
+<p align="center"><b>A Pokémon save editor and bank for Android, with support for dual-screen handhelds.</b></p>
 
 <p align="center">
   <a href="https://discord.gg/bMtzZmTDfu"><img src="https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://github.com/sofianeelhor/PKForge/releases"><img src="https://img.shields.io/badge/Download-APK-2B4E95" alt="Download" /></a>
+  <a href="https://github.com/sofianeelhor/PKForge/wiki"><img src="https://img.shields.io/badge/Wiki-Read%20the%20manual-2B4E95" alt="Wiki" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue" alt="License" /></a>
 </p>
 
@@ -14,8 +15,15 @@
 A Pokémon save editor and cross-generation Bank for Android, tuned for dual-screen
 handhelds like the AYN Thor.
 Built on [PKHeX.Core](https://github.com/kwsch/PKHeX) with the
-[Auto Legality Mod](https://github.com/santacrab2/PKHeX-Plugins) compiled in-process, so
+[Auto Legality Mod](https://github.com/santacrab2/PKHeX-Plugins) built in, so
 legalizing a Pokémon works fully offline, on device.
+
+<p align="center">
+  <img src="docs/screenshots/dual-screen.png" alt="A box on the main screen, the Pokémon inspector on the second screen" width="100%" />
+</p>
+
+Every screen, every emulator and every feature is explained with screenshots in the
+**[PKForge wiki](https://github.com/sofianeelhor/PKForge/wiki)**.
 
 Not affiliated with Nintendo, Game Freak, or The Pokémon Company.
 
@@ -25,16 +33,19 @@ Not affiliated with Nintendo, Game Freak, or The Pokémon Company.
   take full control of your team and boxes. Edit stats, IVs, EVs, moves, nature,
   ability, held item, Met/Origin, Tera type, Hyper Training, shininess, friendship,
   Pokérus, and more, with a live legality check as you go.
-- **One-tap legalize.** The Auto Legality Mod is compiled in-process, so legalizing a
+- **One-tap legalize.** The Auto Legality Mod is built into the app, so legalizing a
   Pokémon works fully offline, on device.
 - **Move Pokémon between games.** Grab a Pokémon from one save and drop it into another,
-  across generations, from a Gen 3 cartridge to a Gen 9 one. PKForge handles the
-  transfer smoothly, so your team can travel with you from game to game.
+  across generations, from Gen 1 to Gen 9 and back. A preview shows every change and
+  the legality verdict before anything is written.
 - **A Bank like Pokémon Home.** Store your whole collection in a cross-game Bank with
-  unlimited themed boxes. Organize with the gamepad, keep living dexes, and pull
+  as many themed boxes as you need. Organize with the gamepad, keep living dexes, and pull
   anything back out into any save whenever you need it.
 - **Track your collection.** The Living Dex tracker follows all 1025 Pokémon across
   every generation, including shiny variants, so you always know what you still need.
+- **Living Dex Autopilot.** Builds a living dex from the Pokémon you already own across
+  all your games and the Bank. It moves Pokémon (never copies them), evolves trade
+  evolutions on the way, and writes nothing until you confirm.
 - **Browse and inject events.** The full Mystery Gift database is bundled and works
   offline. Browse Wonder Cards from old distributions and inject them straight into
   your save.
@@ -55,10 +66,25 @@ Not affiliated with Nintendo, Game Freak, or The Pokémon Company.
   route, and the encounter browser shows every way to catch a species in each game.
 - **Share your teams.** Import and export Showdown sets, and generate QR codes to move
   a set between devices.
-- **Game-specific editors.** Grand Underground, Poké Beans, Fashion, and more, tailored
-  to each game.
-- **Keep your saves safe.** Every write follows validate, backup, then atomic write, and
-  restore points capture every change exactly, so nothing is ever lost.
+- **Game-specific editors.** Grand Underground, Poké Beans, Fashion, and more for each
+  game.
+- **World & events.** Clock repair for Ruby / Sapphire / Emerald, roaming legendaries,
+  re-arming one-time encounters, Entralink and Dream World, Apricorn Box and Pokéwalker,
+  honey trees, event flags, and key item events such as the Eon Ticket or the GS Ball.
+- **Organize boxes.** Box manager (move, lock, copy, rename, wallpapers), sort by dex,
+  level, IVs, type or age, and a legality check and audit of the whole save.
+- **ROM hacks.** Pokémon Unbound, Radical Red, GS Chronicles, Luminescent Platinum and
+  Pokémon Compass are supported with their own data. Unknown hacks open read-only with a
+  warning.
+- **HaX and Hardcore modes.** HaX lifts the legality limits. Hardcore turns data editing
+  off for challenge runs and RetroAchievements players, while moving Pokémon stays
+  possible.
+- **Built for handhelds.** Fully playable with a gamepad or by touch. On dual-screen
+  devices the second screen shows the Pokémon inspector, game art, Pokédex entries or
+  the Poképark journal.
+- **Keep your saves safe.** Every write is validated, then preceded by a restore point.
+  Only the Pokémon you touched may change, and risky saves open read-only. The 20 most
+  recent restore points are kept.
 
 ## Screenshots
 
@@ -90,6 +116,16 @@ Not affiliated with Nintendo, Game Freak, or The Pokémon Company.
 <p align="center">
   <img src="docs/screenshots/nuzlocke.png" alt="Nuzlocke report" width="49%" />
   <img src="docs/screenshots/encounters.png" alt="Encounter browser" width="49%" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/generate.png" alt="Generate a Pokémon" width="49%" />
+  <img src="docs/screenshots/transfer.png" alt="Transfer preview" width="49%" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/autopilot.png" alt="Living Dex Autopilot" width="49%" />
+  <img src="docs/screenshots/link.png" alt="Linking an emulator" width="49%" />
 </p>
 
 ## Supported games
@@ -124,8 +160,12 @@ You can also open a single save file directly.
 ## Installation
 
 Download the APK from [Releases](https://github.com/sofianeelhor/PKForge/releases) and
-allow installs from unknown sources. First run walks you through linking an emulator
-(RetroArch, melonDS, Azahar/Lime3DS, Citra MMJ, Eden) or opening a single save file.
+allow installs from unknown sources. First run walks you through linking an emulator or
+opening a single save file.
+
+New to PKForge? Start with [Getting Started](https://github.com/sofianeelhor/PKForge/wiki/Getting-Started).
+If PKForge finds no saves, the folder picked is usually the wrong one: see
+[Choosing the right folder](https://github.com/sofianeelhor/PKForge/wiki/Choosing-the-Right-Folder).
 
 ## 💬 Discord
 
@@ -163,9 +203,12 @@ docs/                       architecture, bank model, development, art direction
 
 ## Credits
 
-- [PKHeX](https://github.com/kwsch/PKHeX), the engine everything runs on
+- [PKHeX](https://github.com/kwsch/PKHeX) by Kaphotics and every contributor over the
+  years, the engine everything runs on
+- [spritedmistery](https://www.instagram.com/spritedmistery/), the PKForge logo and several
+  of the app's assets
 - [PKHeX-Plugins / Auto Legality Mod](https://github.com/santacrab2/PKHeX-Plugins), the
-  offline legalizer compiled in-process
+  offline legalizer built into the app
 - [PKSM](https://github.com/FlagBrew/PKSM), the pixel chrome this UI builds on (GPL-3,
   see [UI attribution](src/PKForge.App/Resources/UI/ATTRIBUTION.md))
 - [SteamGridDB](https://www.steamgriddb.com), cartridge icons, second-screen logos, and
