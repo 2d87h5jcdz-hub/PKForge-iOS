@@ -11,7 +11,6 @@
 
 ---
 
-
 A Pokémon save editor and cross-generation Bank for Android, tuned for dual-screen
 handhelds like the AYN Thor.
 Built on [PKHeX.Core](https://github.com/kwsch/PKHeX) with the
@@ -26,6 +25,9 @@ Every screen, every emulator and every feature is explained with screenshots in 
 **[PKForge wiki](https://github.com/sofianeelhor/PKForge/wiki)**.
 
 Not affiliated with Nintendo, Game Freak, or The Pokémon Company.
+
+> [!CAUTION]
+> pkforgeapp.com is **not** an official PKForge site and is not run by the maintainer. Do not download anything from it. Only use releases from this repository.
 
 ## Features
 
