@@ -68,7 +68,9 @@ public sealed record MonSummary(
     // ── Per-format extras (form argument, mint, handler, memories, TRs, PID); null when not decoded
     MonFieldSummary? Fields = null,
     // ── Sprite key beyond species/form/shiny (gender art, Alcremie sweet, cosplay)
-    SpriteTraits Traits = default)
+    SpriteTraits Traits = default,
+    // ── The legality checks grouped by topic (null = not analyzed, or an older report)
+    IReadOnlyList<LegalityCheck>? LegalityChecks = null)
 {
     /// <summary>The sprite key of this Pokémon.</summary>
     public SpriteLook Look => new(Species, Form, IsShiny, Traits);
@@ -94,7 +96,8 @@ public sealed record MonSummary(
     public int BaseTotal => BaseStats.Sum();
 
     /// <summary>A copy carrying a legality verdict (the analysis runs after the rest is shown).</summary>
-    public MonSummary WithLegality(bool? legal, IReadOnlyList<string> lines) => this with { Legal = legal, LegalityLines = lines };
+    public MonSummary WithLegality(bool? legal, IReadOnlyList<string> lines, IReadOnlyList<LegalityCheck>? checks = null) =>
+        this with { Legal = legal, LegalityLines = lines, LegalityChecks = checks };
 }
 
 /// <summary>Builds <see cref="MonSummary"/> models from a live engine session.</summary>

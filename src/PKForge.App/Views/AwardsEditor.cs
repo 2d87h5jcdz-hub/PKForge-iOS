@@ -20,11 +20,12 @@ public static class AwardsEditor
             var selected = ribbons.Count(r => r.Value != 0);
             var options = new List<PadOption>();
             if (pokerus.Supported || pokerus.Status != PokerusStatus.Susceptible)
-                options.Add(new PadOption($"Pokérus · {PokerusLabel(pokerus)}", IconPath: PokerusIcon(pokerus.Status)));
+                options.Add(new PadOption($"Pokérus · {PokerusLabel(pokerus)}", IconPath: PokerusIcon(pokerus.Status),
+                    Detail: "A rare virus that doubles the effort values it earns in battle."));
             if (ribbons.Count != 0)
-                options.Add(new PadOption($"Ribbons · {selected}/{ribbons.Count}", IconPath: "ribbons"));
+                options.Add(new PadOption($"Ribbons · {selected}/{ribbons.Count}", IconPath: "ribbons", Detail: "The ribbons and marks it has earned."));
             if (affixed.Supported)
-                options.Add(new PadOption($"Title · {affixed.SelectedName}", IconPath: "ribbons"));
+                options.Add(new PadOption($"Title · {affixed.SelectedName}", IconPath: "ribbons", Detail: "The ribbon or mark shown as a title with its name."));
 
             if (options.Count == 0)
             {
@@ -54,9 +55,9 @@ public static class AwardsEditor
         var current = session.GetPokerus(box, slot);
         var choice = await EditorMenu.ShowAsync(host, "POKéRUS",
             "Infectious spreads Pokérus. Cured keeps the immunity marker but no longer spreads it.",
-            new PadOption("Infect", IconPath: "pokerus-infected", Accent: UiTokens.GiftRed),
-            new PadOption("Cure", IconPath: "pokerus-cured", Accent: UiTokens.Green),
-            new PadOption("Clear / susceptible", Glyph: "○", Accent: UiTokens.Ink1));
+            new PadOption("Infect", IconPath: "pokerus-infected", Accent: UiTokens.GiftRed, Detail: "It carries Pokérus and can spread it."),
+            new PadOption("Cure", IconPath: "pokerus-cured", Accent: UiTokens.Green, Detail: "It stops spreading Pokérus and can't catch it again."),
+            new PadOption("Clear / susceptible", Glyph: "○", Accent: UiTokens.Ink1, Detail: "No Pokérus at all; it can catch it again."));
         if (choice is null) return false;
 
         var status = choice switch

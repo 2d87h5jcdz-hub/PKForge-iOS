@@ -10,13 +10,14 @@ using SkiaSharp.Views.Maui.Controls;
 namespace PKForge.App.Views;
 
 /// <summary>
-/// Full editor for a stored bank Pokémon, drawn as the Gen-6 Pokémon Information
-/// screen: a SummaryBg surface with white panels and the maroon header strip, a stats
-/// table with IV · EV · value columns, quick actions as stack buttons and the
-/// STATS/MOVES/SAVE choice capsules. The mon is opened in its own throwaway save
-/// context so every capability the in-save editor has - legality, ability tables,
-/// stat maths - works here too. Edits stay in memory until "SAVE" writes them back
-/// in place (same box, slot and id). The d-pad walks every row and button.
+/// Full editor for a stored bank Pokémon, in the art direction's panel look: a wide window
+/// with a vertical list on the left (the Info and Stats pages, then every sub-editor) and
+/// the drawn header over the chosen page on the right. Info holds the identity rows; Stats
+/// is its own page, a Base · IV · EV · value table with totals, Hidden Power and the IV
+/// stars. The mon is opened in its own throwaway save context so every capability the
+/// in-save editor has - legality, ability tables, stat maths - works here too. Edits stay
+/// in memory until "Save" writes them back in place (same box, slot and id). The d-pad
+/// walks each column; left and right move between the list and the page.
 /// </summary>
 public static class BankEntryEditor
 {
@@ -26,6 +27,15 @@ public static class BankEntryEditor
         var data = services.GetRequiredService<IGameDataService>();
         var legalizer = services.GetService<ILegalizerService>();
         var sprites = services.GetRequiredService<ISpriteService>();
+
+        // A ROM hack's record keeps fields no PKHeX editor knows; saving from here would
+        // rewrite it. Its Summary stays available.
+        if (PKForge.Engine.EntityBytes.RomHackGame(entry.Info.Format) is { } hack)
+        {
+            await EditorMenu.ShowAsync(host, "Can't edit",
+                $"Pokémon from {hack} can only be edited in their own game.", "OK");
+            return false;
+        }
 
         ISaveEngineSession? session;
         try
@@ -132,7 +142,6 @@ public static class BankEntryEditor
     private sealed class SummaryWindow : IPadHandler
     {
         private const string Font = DsChrome.PixelFont;
-        private static readonly string[] StatNames = ["HP", "ATK", "DEF", "SPA", "SPD", "SPE"];
 
         private readonly Grid _host;
         private readonly IBankService _bank;
@@ -147,14 +156,18 @@ public static class BankEntryEditor
         private readonly GamepadRouter? _router;
         private readonly ScrollView _scroll = new();
         private readonly Dictionary<string, SummaryRow> _rows = new();
-        private readonly List<(IFocusTarget Target, View View, bool Scrolls, Func<Task> Activate)> _slots = [];
-        private readonly SKCanvasView _spriteView;
-        private readonly Label _nickname;
-        private readonly Label _speciesLine;
-        private readonly Label _levelLine;
-        private readonly Image _genderIcon;
-        private readonly Image _shinyIcon;
-        private readonly StatRow[] _statRows = new StatRow[6];
+        // Focus stops: the side list (column 0) and the open page (column 1).
+        private readonly List<(IFocusTarget Target, View View, int Column, Func<Task> Activate)> _slots = [];
+        private readonly List<(IFocusTarget Target, View View, int Column, Func<Task> Activate)> _infoSlots = [];
+        private readonly List<(IFocusTarget Target, View View, int Column, Func<Task> Activate)> _statsSlots = [];
+        private readonly List<(IFocusTarget Target, View View, int Column, Func<Task> Activate)> _sideSlots = [];
+        private readonly SKCanvasView _header;
+        private readonly SKCanvasView _statsTable;
+        private readonly View _infoPage;
+        private readonly View _statsPage;
+        private SideTab _infoTab = null!;
+        private SideTab _statsTab = null!;
+        private bool _statsOpen;
         private EntityDetail _detail = null!;
         private int _focus;
         private bool _dirty;
@@ -180,219 +193,238 @@ public static class BankEntryEditor
             var caps = session.GetTrainingCaps();
             var classicTraining = caps.IvMax == 15;
 
-            // ── Identity panel: sprite hero over the editable fact rows.
-            _spriteView = new SKCanvasView
+            // ── The drawn header: name, level, shiny and gender, the species and where it came from.
+            _header = new SKCanvasView { HeightRequest = EditorRows.Design(EditorPaint.DesignHeaderHeight), InputTransparent = true };
+            _header.PaintSurface += PaintHeader;
+
+            // ── Info: the identity rows, then the quick tools.
+            var identity = new VerticalStackLayout();
+            AddRow(identity, _infoSlots, "nickname", "Nickname", EditNicknameAsync);
+            AddRow(identity, _infoSlots, "species", "Species", EditSpeciesAsync);
+            AddRow(identity, _infoSlots, "level", "Level", EditLevelAsync);
+            AddRow(identity, _infoSlots, "nature", "Nature", EditNatureAsync);
+            AddRow(identity, _infoSlots, "ability", "Ability", EditAbilityAsync);
+            AddRow(identity, _infoSlots, "item", "Held item", EditItemAsync);
+            AddRow(identity, _infoSlots, "ball", "Ball", EditBallAsync);
+            AddRow(identity, _infoSlots, "gender", "Gender", EditGenderAsync);
+            AddRow(identity, _infoSlots, "friendship", "Friendship", EditFriendshipAsync);
+            AddRow(identity, _infoSlots, "ot", "Trainer", EditOtAsync);
+            AddRow(identity, _infoSlots, "shiny", "Shiny", ToggleShinyAsync);
+            identity.Add(ToolRow(_infoSlots, ("Lv 100", Level100Async), ("Make mine", MakeMineAsync), ("QR", QrAsync)));
+            _infoPage = identity;
+
+            // ── Stats: its own page, the table drawn, then the spread editors.
+            _statsTable = new SKCanvasView { HeightRequest = EditorRows.Design(560), InputTransparent = true };
+            _statsTable.PaintSurface += PaintStatsTable;
+            // The table is drawn 1100 wide by 600 tall: its height follows its width.
+            _statsTable.SizeChanged += (_, _) =>
             {
-                WidthRequest = 68,
-                HeightRequest = 68,
-                HorizontalOptions = LayoutOptions.Center,
-                VerticalOptions = LayoutOptions.Center,
-                InputTransparent = true,
+                if (_statsTable.Width > 0 && Math.Abs(_statsTable.HeightRequest - _statsTable.Width * 600 / 1100) > 1)
+                    _statsTable.HeightRequest = _statsTable.Width * 600 / 1100;
             };
-            _spriteView.PaintSurface += PaintSprite;
+            var stats = new VerticalStackLayout { Children = { _statsTable } };
+            AddRow(stats, _statsSlots, "ivs", classicTraining ? "DVs" : "IVs", EditIvsAsync);
+            AddRow(stats, _statsSlots, "evs", classicTraining ? "Stat exp" : "EVs", EditEvsAsync);
+            stats.Add(ToolRow(_statsSlots, (classicTraining ? "Max DV" : "Max IV", MaxIvsAsync), (classicTraining ? "0 Exp" : "0 EV", ClearEvsAsync)));
+            _statsPage = stats;
+            _statsPage.IsVisible = false;
+            _scroll.Content = new Grid { Children = { _infoPage, _statsPage } };
 
-            _genderIcon = new Image { WidthRequest = 20, HeightRequest = 20, VerticalOptions = LayoutOptions.Center };
-            _shinyIcon = new Image { WidthRequest = 20, HeightRequest = 20, VerticalOptions = LayoutOptions.Center, Source = PksmIcons.Source("shiny") };
-            _nickname = new Label
+            // ── The side list: the two pages, then every sub-editor.
+            var side = new VerticalStackLayout { Spacing = EditorRows.Design(10) };
+            _infoTab = SideItem(side, "Info", "info", () => { ShowPage(stats: false); return Task.CompletedTask; });
+            _statsTab = SideItem(side, "Stats", "stats", () => { ShowPage(stats: true); return Task.CompletedTask; });
+            side.Add(new BoxView { HeightRequest = EditorRows.Design(12), Color = Colors.Transparent });
+            SideItem(side, "Moves", "moves", EditMovesAsync);
+            SideItem(side, "Met / origin", "map", EditMetAsync);
+            SideItem(side, "Potential", "stats", EditPotentialAsync);
+            SideItem(side, "Awards", "ribbons", EditAwardsAsync);
+            SideItem(side, "Legalize", "fix", LegalizeAsync);
+            SideItem(side, "Form & shiny", "shiny", () => SubEditorAsync(MonFieldsEditor.FormAndShinyAsync));
+            SideItem(side, "Trainers", "trainer", () => SubEditorAsync(MonFieldsEditor.TrainersAsync));
+            SideItem(side, "Tech records", "moves", () => SubEditorAsync(MonFieldsEditor.TechRecordsAsync));
+
+            var right = new Grid
             {
-                FontFamily = Font,
-                FontSize = 18,
-                FontAttributes = FontAttributes.Bold,
-                TextColor = UiTokens.Ink0,
-                VerticalTextAlignment = TextAlignment.Center,
-                LineBreakMode = LineBreakMode.TailTruncation,
-                MaxLines = 1,
+                RowDefinitions = [new(GridLength.Auto), new(GridLength.Star)],
+                RowSpacing = EditorRows.Design(16),
+                Children = { _header, _scroll },
             };
-            _speciesLine = PixelLine();
-            _levelLine = PixelLine();
-
-            var hero = new Grid
+            Grid.SetRow(_scroll, 1);
+            var body = new Grid
             {
-                ColumnDefinitions = [new(new GridLength(76)), new(GridLength.Star)],
-                ColumnSpacing = 10,
-                Children =
-                {
-                    _spriteView,
-                    new VerticalStackLayout
-                    {
-                        Spacing = 3,
-                        VerticalOptions = LayoutOptions.Center,
-                        Children =
-                        {
-                            new HorizontalStackLayout { Spacing = 8, Children = { _nickname, _genderIcon, _shinyIcon } },
-                            new HorizontalStackLayout { Spacing = 10, Children = { _speciesLine, _levelLine } },
-                        },
-                    },
-                },
+                ColumnSpacing = EditorRows.Design(28),
+                ColumnDefinitions = [new(new GridLength(EditorRows.Design(380))), new(GridLength.Star)],
+                Children = { new ScrollView { Content = side }, right },
             };
-            hero.SetColumn((View)hero.Children[1], 1);
-
-            var identity = new VerticalStackLayout { Spacing = 3 };
-            identity.Add(hero);
-            AddRow(identity, "nickname", "NICKNAME", "rename", EditNicknameAsync);
-            AddRow(identity, "species", "SPECIES", "pokedex", EditSpeciesAsync);
-            AddRow(identity, "level", "LEVEL", "level", EditLevelAsync);
-            AddRow(identity, "nature", "NATURE", "nature", EditNatureAsync);
-            AddRow(identity, "ability", "ABILITY", "ability", EditAbilityAsync);
-            AddRow(identity, "item", "HELD ITEM", "item", EditItemAsync);
-            AddRow(identity, "ball", "BALL", "ball", EditBallAsync);
-            AddRow(identity, "gender", "GENDER", "genderless", EditGenderAsync);
-            AddRow(identity, "friendship", "FRIENDSHIP", "heart", EditFriendshipAsync);
-            AddRow(identity, "ot", "TRAINER", "profile", EditOtAsync);
-            AddRow(identity, "shiny", "SHINY", "shiny", ToggleShinyAsync);
-            View identityPanel = identity;
-
-            // ── Stats panel: the IV · EV · value table plus the spread editors.
-            var stats = new VerticalStackLayout { Spacing = 4 };
-            stats.Add(StatHeader(classicTraining));
-            for (var i = 0; i < _statRows.Length; i++)
-            {
-                _statRows[i] = new StatRow(i, StatNames[i]);
-                stats.Add(_statRows[i]);
-            }
-            stats.Add(new BoxView { HeightRequest = 6 });
-            AddRow(stats, "ivs", classicTraining ? "DVS" : "IVS", "stats", EditIvsAsync);
-            AddRow(stats, "evs", classicTraining ? "STAT EXP" : "EVS", "stats", EditEvsAsync);
-            View statsPanel = stats;
-
-            // ── Quick actions: the little blue stack buttons on the summary surface.
-            var quick = new HorizontalStackLayout
-            {
-                Spacing = 8,
-                Children =
-                {
-                    QuickButton(classicTraining ? "Max DV" : "Max IV", MaxIvsAsync),
-                    QuickButton(classicTraining ? "0 Exp" : "0 EV", ClearEvsAsync),
-                    QuickButton("Lv 100", Level100Async),
-                    QuickButton("Make mine", MakeMineAsync),
-                    QuickButton("QR", QrAsync),
-                },
-            };
-
-            // The window is the panel: its sections are titled groups split by a hairline,
-            // not panels nested inside a panel inside the window.
-            var surface = new VerticalStackLayout
-            {
-                Spacing = UiTokens.Space2,
-                Padding = new Thickness(0, 0, 4, 0),
-                Children = { identityPanel, Kit.Divider(2), Kit.SectionTitle("Stats"), statsPanel, quick },
-            };
-            _scroll.Content = surface;
-
-            // Rows wrap instead of running off the window's edge: every button stays visible
-            // and tappable at any width. Save lives in the hint bar (X), always in view.
-            var actions = ActionRow(
-                ActionButton("Moves", EditMovesAsync, icon: "moves"),
-                ActionButton("Met / origin", EditMetAsync, icon: "map"),
-                ActionButton("Potential", EditPotentialAsync, icon: "stats"),
-                ActionButton("Awards", EditAwardsAsync, icon: "ribbons"),
-                ActionButton("Legalize", LegalizeAsync, icon: "fix"));
-            var fieldActions = ActionRow(
-                ActionButton("Form & shiny", () => SubEditorAsync(MonFieldsEditor.FormAndShinyAsync), icon: "shiny"),
-                ActionButton("Trainers", () => SubEditorAsync(MonFieldsEditor.TrainersAsync), icon: "trainer"),
-                ActionButton("Tech records", () => SubEditorAsync(MonFieldsEditor.TechRecordsAsync), icon: "moves"));
+            Grid.SetColumn(right, 1);
 
             var content = new Grid
             {
-                RowSpacing = 8,
-                RowDefinitions = [new(GridLength.Auto), new(GridLength.Star), new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto)],
+                RowSpacing = EditorRows.Design(16),
+                RowDefinitions = [new(GridLength.Auto), new(GridLength.Star), new(GridLength.Auto)],
+                HeightRequest = host.Height > 0 ? host.Height - 60 : -1,
             };
-            content.Add(Kit.HeaderBar("Pokémon information"));
-            content.Add(_scroll);
-            Grid.SetRow(_scroll, 1);
-            content.Add(actions);
-            Grid.SetRow(actions, 2);
-            content.Add(fieldActions);
-            Grid.SetRow(fieldActions, 3);
+            content.Add(EditorRows.EditorSection("Pokémon information"));
+            content.Add(body);
+            Grid.SetRow(body, 1);
             var hints = Kit.WindowHints(("A", "Open", () => OnPadButton(PadButton.A)), ("X", "Save", () => Run(SaveAsync)), ("B", "Close", RequestClose));
             content.Add(hints);
-            Grid.SetRow(hints, 4);
+            Grid.SetRow(hints, 2);
 
-            var window = Kit.OverlayWindow(host, content, preferredMaxWidth: 620, scroll: false);
+            var window = Kit.OverlayWindow(host, content, preferredMaxWidth: EditorRows.Design(1780), scroll: false);
             _overlay = Kit.AttachOverlay(host, window, RequestClose);
 
+            ShowPage(stats: false);
             ApplyValues();
-            Highlight(0);
+            Highlight(_slots.IndexOf(_sideSlots[0]));
             _router?.Push(this);
         }
 
-        private static Label PixelLine() => new()
+        /// <summary>Shows Info or Stats; the focus stops follow the page.</summary>
+        private void ShowPage(bool stats)
         {
-            FontFamily = Font,
-            FontSize = UiTokens.TextBody,
-            TextColor = UiTokens.Ink1,
-            VerticalTextAlignment = TextAlignment.Center,
-        };
+            _statsOpen = stats;
+            _infoPage.IsVisible = !stats;
+            _statsPage.IsVisible = stats;
+            _infoTab.Active = !stats;
+            _statsTab.Active = stats;
+            var focused = _focus < _slots.Count ? _slots[_focus].View : null;
+            _slots.Clear();
+            _slots.AddRange(_sideSlots);
+            _slots.AddRange(stats ? _statsSlots : _infoSlots);
+            if (focused is not null && _slots.FindIndex(slot => ReferenceEquals(slot.View, focused)) is var at and >= 0) _focus = at;
+            _ = _scroll.ScrollToAsync(0, 0, false);
+        }
 
-        private static ColumnDefinitionCollection StatColumns() => [new(new GridLength(64)), new(GridLength.Star), new(GridLength.Star), new(GridLength.Star)];
-
-        private static View StatHeader(bool classicTraining)
+        private SideTab SideItem(VerticalStackLayout side, string label, string icon, Func<Task> activate)
         {
-            var grid = new Grid { ColumnDefinitions = StatColumns(), HeightRequest = 20 };
-            void Cap(string text, int column)
+            var item = new SideTab(label, icon);
+            item.Activated = () => RunFrom(item, activate);
+            side.Add(item);
+            _sideSlots.Add((item, item, 0, activate));
+            return item;
+        }
+
+        private View ToolRow(List<(IFocusTarget Target, View View, int Column, Func<Task> Activate)> page, params (string Label, Func<Task> Activate)[] tools)
+        {
+            var row = new Grid
             {
-                var label = new Label
-                {
-                    Text = text,
-                    FontFamily = Font,
-                    FontSize = UiTokens.TextSmall,
-                    TextColor = UiTokens.InkSoft,
-                    VerticalTextAlignment = TextAlignment.Center,
-                };
-                grid.Add(label);
-                Grid.SetColumn(label, column);
-            }
-            Cap("Stat", 0);
-            Cap(classicTraining ? "DV" : "IV", 1);
-            Cap(classicTraining ? "Exp" : "EV", 2);
-            Cap("Value", 3);
-            return grid;
-        }
-
-        private void AddRow(VerticalStackLayout stack, string key, string caption, string? icon, Func<Task> activate)
-        {
-            var row = new SummaryRow(caption, icon);
-            row.Activated = () => RunFrom(row, activate);
-            stack.Add(row);
-            _rows[key] = row;
-            _slots.Add((row, row, true, activate));
-        }
-
-        private View QuickButton(string label, Func<Task> activate)
-        {
-            var button = Kit.MiniCapsule(label, UiTokens.MenuBlue);
-            button.FontFamily = Font;
-            button.FontSize = UiTokens.TextSmall;
-            button.WidthRequest = 86;
-            var frame = new FocusFrame(button);
-            button.Clicked += (_, _) => RunFrom(frame, activate);
-            _slots.Add((frame, frame, false, activate));
-            return frame;
-        }
-
-        private static FlexLayout ActionRow(params View[] buttons)
-        {
-            var row = new FlexLayout
-            {
-                Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap,
-                JustifyContent = Microsoft.Maui.Layouts.FlexJustify.Center,
-                AlignItems = Microsoft.Maui.Layouts.FlexAlignItems.Center,
+                ColumnSpacing = EditorRows.Design(16),
+                Margin = new Thickness(EditorRows.Design(28), EditorRows.Design(20), EditorRows.Design(28), EditorRows.Design(8)),
             };
-            foreach (var button in buttons)
+            for (var i = 0; i < tools.Length; i++)
             {
-                button.Margin = new Thickness(4, 3);
-                row.Children.Add(button);
+                row.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+                var (label, activate) = tools[i];
+                var button = EditorRows.EditorTool(label);
+                var frame = new FocusFrame(button);
+                button.Clicked += (_, _) => RunFrom(frame, activate);
+                page.Add((frame, frame, 1, activate));
+                row.Add(frame, i, 0);
             }
             return row;
         }
 
-        private View ActionButton(string label, Func<Task> activate, Color? accent = null, string? icon = null)
+        private void PaintHeader(object? sender, SKPaintSurfaceEventArgs args)
         {
-            var button = Kit.Capsule(label, accent ?? UiTokens.Cyan, primary: accent is not null, icon: icon);
-            var frame = new FocusFrame(button);
-            button.Clicked += (_, _) => RunFrom(frame, activate);
-            _slots.Add((frame, frame, false, activate));
-            return frame;
+            var canvas = args.Surface.Canvas;
+            canvas.Clear(SKColors.Transparent);
+            var d = _detail;
+            var species = NameOf(_data.SpeciesNames, d.Species);
+            var name = string.IsNullOrWhiteSpace(d.Nickname) ? species : d.Nickname;
+            var from = string.IsNullOrWhiteSpace(_entry.Info.SourceName) ? null : $"From {_entry.Info.SourceName}";
+            var unit = Math.Min(args.Info.Width / EditorPaint.DesignWidth, args.Info.Height / EditorPaint.DesignHeaderHeight);
+            var accent = d.Types is { Count: > 0 } types ? InfoKit.TypeColor(types[0]).ToSKColor() : (SKColor?)null;
+            EditorPaint.PaintHeader(canvas, new SKRect(0, 0, EditorPaint.DesignWidth * unit, args.Info.Height),
+                new EditorPaint.Header(name, d.Level, d.IsShiny, d.Gender, species, from, accent), BoxBrowserPage.PixelTypeface(), unit);
+            // The Pokémon at the header's right end.
+            var bitmap = _sprites.GetSprite(d.Look);
+            if (bitmap is null) { _sprites.Warm(d.Look, () => MainThread.BeginInvokeOnMainThread(_header.InvalidateSurface)); return; }
+            var box = args.Info.Height * 0.95f;
+            var scale = Math.Min(box / bitmap.Width, box / bitmap.Height);
+            var w = bitmap.Width * scale;
+            var h = bitmap.Height * scale;
+            using var image = SKImage.FromBitmap(bitmap);
+            canvas.DrawImage(image, new SKRect(args.Info.Width - w - 8, (args.Info.Height - h) / 2, args.Info.Width - 8, (args.Info.Height + h) / 2),
+                new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
+        }
+
+        /// <summary>
+        /// The stats page's table: stat, base, IV (gold at the cap), EV and value; the totals in
+        /// gold under it; then Hidden Power and the IV stars.
+        /// </summary>
+        private void PaintStatsTable(object? sender, SKPaintSurfaceEventArgs args)
+        {
+            var c = args.Surface.Canvas;
+            c.Clear(SKColors.Transparent);
+            var unit = args.Info.Width / 1100f;
+            c.Scale(unit);
+            var d = _detail;
+            var caps = _session.GetTrainingCaps();
+            var classic = caps.IvMax == 15;
+            var baseStats = _session.GetBaseStats(d.Species);
+            int[] bases = [baseStats.Hp, baseStats.Atk, baseStats.Def, baseStats.SpA, baseStats.SpD, baseStats.Spe];
+            string[] names = ["HP", "Atk", "Def", "SpA", "SpD", "Spe"];
+            float[] columns = [250, 450, 650, 850, 1030];
+            const float rowH = 60, text = 32;
+            var head = new[] { "Base", classic ? "DV" : "IV", classic ? "Exp" : "EV", "Value" };
+            using (var band = new SKPaint { Color = EditorPaint.ChipTop }) c.DrawRoundRect(new SKRect(200, 0, 1100, rowH), 10, 10, band);
+            for (var i = 0; i < head.Length; i++)
+                SummaryInk.Draw(c, head[i], (columns[i] + columns[i + 1]) / 2 - 100 + 100, SummaryInk.Center(rowH / 2, text), text, EditorPaint.ChipInk, align: SKTextAlign.Center);
+            var nature = d.Nature;
+            var up = _session.Generation >= 3 ? NatureFacts.Raised(nature) : null;
+            var down = _session.Generation >= 3 ? NatureFacts.Lowered(nature) : null;
+            for (var i = 0; i < 6; i++)
+            {
+                var y = rowH * (i + 1) + 6;
+                using (var band = new SKPaint { Color = EditorPaint.RowBand(i % 2 == 0) }) c.DrawRect(new SKRect(0, y, 1100, y + rowH), band);
+                var tone = up == i ? new SKColor(0xFA, 0x8C, 0x96) : down == i ? new SKColor(0x82, 0xB4, 0xFA) : EditorPaint.Label;
+                SummaryInk.Draw(c, names[i], 40, SummaryInk.Center(y + rowH / 2, text), text, tone);
+                var iv = d.IVs[i];
+                string?[] cells = [bases[i].ToString(), iv.ToString(), d.EVs[i].ToString(), d.Stats is { } stats && i < stats.Count ? stats[i].ToString() : "-"];
+                for (var k = 0; k < cells.Length; k++)
+                {
+                    var ink = k == 1 && iv >= caps.IvMax ? Pksm.ShinyGold : EditorPaint.Value;
+                    SummaryInk.Draw(c, cells[k]!, (columns[k] + columns[k + 1]) / 2, SummaryInk.Center(y + rowH / 2, text), text, ink, align: SKTextAlign.Center);
+                }
+            }
+            var totalY = rowH * 7 + 12;
+            using (var band = new SKPaint { Color = EditorPaint.ChipTop }) c.DrawRoundRect(new SKRect(0, totalY, 1100, totalY + rowH), 10, 10, band);
+            SummaryInk.Draw(c, "Total", 40, SummaryInk.Center(totalY + rowH / 2, text), text, EditorPaint.ChipInk);
+            string[] totals = [bases.Sum().ToString(), d.IVs.Sum().ToString(), d.EVs.Sum().ToString(), d.Stats is { Count: 6 } all ? all.Sum().ToString() : "-"];
+            for (var k = 0; k < totals.Length; k++)
+                SummaryInk.Draw(c, totals[k], (columns[k] + columns[k + 1]) / 2, SummaryInk.Center(totalY + rowH / 2, text), text, Pksm.ShinyGold, align: SKTextAlign.Center);
+
+            // Hidden Power and the IV stars under the table.
+            var extraY = totalY + rowH + 40;
+            SummaryInk.Draw(c, "Hidden Power", 40, SummaryInk.Center(extraY, text), text, EditorPaint.Label);
+            if (InfoPickers.Info?.GetHiddenPowerType(_session, d.IVs) is { } hp && TypeFacts.IsValid(hp))
+                TypePlates.Paint(c, new SKRect(300, extraY - 22, 460, extraY + 22), hp);
+            else SummaryInk.Draw(c, "—", 300, SummaryInk.Center(extraY, text), text, EditorPaint.Value);
+            if (!classic)
+            {
+                var stars = IvRank.Stars(d.IVs);
+                var color = stars switch
+                {
+                    1 => new SKColor(0xF0, 0x68, 0x68),
+                    2 => Pksm.ShinyGold,
+                    3 => Pksm.Legal,
+                    _ => Pksm.SignalBlue,
+                };
+                SummaryInk.Draw(c, "IV rank", 600, SummaryInk.Center(extraY, text), text, EditorPaint.Label);
+                SummaryInk.Draw(c, new string('★', stars) + new string('☆', 4 - stars), 760, SummaryInk.Center(extraY, 38), 38, color);
+            }
+        }
+
+        private void AddRow(VerticalStackLayout stack, List<(IFocusTarget Target, View View, int Column, Func<Task> Activate)> page,
+            string key, string caption, Func<Task> activate)
+        {
+            var row = new SummaryRow(caption, dark: stack.Children.Count(child => child is SummaryRow) % 2 == 0);
+            row.Activated = () => RunFrom(row, activate);
+            stack.Add(row);
+            _rows[key] = row;
+            page.Add((row, row, 1, activate));
         }
 
         // ── Display refresh ──────────────────────────────────────────────────────
@@ -400,68 +432,31 @@ public static class BankEntryEditor
         private void ApplyValues()
         {
             var d = _detail;
-            _nickname.Text = d.Nickname;
-            _speciesLine.Text = NameOf(_data.SpeciesNames, d.Species);
-            _levelLine.Text = $"Lv. {d.Level}";
-            _genderIcon.Source = PksmIcons.Source(d.Gender switch { 0 => "male", 1 => "female", _ => "genderless" });
-            _shinyIcon.IsVisible = d.IsShiny;
-
             _rows["nickname"].Value = d.Nickname;
-            _rows["species"].Value = _speciesLine.Text;
+            _rows["species"].Value = NameOf(_data.SpeciesNames, d.Species);
             _rows["level"].Value = d.Level.ToString();
             _rows["nature"].Value = _session.Generation <= 2 ? "none (Gen 1/2)"
                 : $"{NameOf(_data.NatureNames, d.Nature)}  {NatureFacts.EffectLabel(d.Nature)}";
             _rows["ability"].Value = NameOf(_data.AbilityNames, d.Ability);
             _rows["item"].Value = d.HeldItem == 0 ? "none" : NameOf(_data.ItemNames, d.HeldItem);
             _rows["ball"].Value = NameOf(_data.BallNames, d.Ball);
-            _rows["gender"].Value = d.Gender switch { 0 => "Male", 1 => "Female", _ => "Genderless" };
-            _rows["gender"].Icon = d.Gender switch { 0 => "male", 1 => "female", _ => "genderless" };
+            _rows["gender"].Value = d.Gender switch { 0 => "♂ Male", 1 => "♀ Female", _ => "Genderless" };
             _rows["friendship"].Value = d.Friendship.ToString();
             _rows["ot"].Value = d.OriginalTrainer;
-            _rows["shiny"].Value = d.IsShiny ? "yes" : "no";
-            for (var i = 0; i < _statRows.Length; i++)
-                _statRows[i].Set(d.IVs[i], d.EVs[i], d.Stats is { } values && i < values.Count ? values[i] : null);
+            _rows["shiny"].Value = d.IsShiny ? "★ Yes" : "☆ No";
             var caps = _session.GetTrainingCaps();
             _rows["ivs"].Value = $"Total {d.IVs.Sum()}";
             _rows["evs"].Value = caps.EvMax == 65535
                 ? "Max 65535 per stat"
                 : $"Total {d.EVs.Sum()}/510";
-            _spriteView.InvalidateSurface();
+            _header.InvalidateSurface();
+            _statsTable.InvalidateSurface();
         }
 
         private string NameOf(IReadOnlyList<string> names, int id) =>
             (uint)id < (uint)names.Count && names[id].Length > 0 ? names[id]
             : (uint)id < (uint)_data.ItemNames.Count && _data.ItemNames[id].Length > 0 ? _data.ItemNames[id]
             : $"#{id}";
-
-        private void PaintSprite(object? sender, SKPaintSurfaceEventArgs args)
-        {
-            var canvas = args.Surface.Canvas;
-            canvas.Clear(SKColors.Transparent);
-            var bitmap = _sprites.GetSprite(_detail.Look);
-            if (bitmap is null)
-            {
-                // Not decoded yet: show the resting-ball mark and warm the cache.
-                _sprites.Warm(_detail.Look,
-                    () => MainThread.BeginInvokeOnMainThread(_spriteView.InvalidateSurface));
-                using var ball = new SKPaint { Color = UiTokens.SkEmptyMark, Style = SKPaintStyle.Stroke, StrokeWidth = 2f, IsAntialias = true };
-                var cx = args.Info.Width / 2f;
-                var cy = args.Info.Height / 2f;
-                var r = Math.Min(args.Info.Width, args.Info.Height) * 0.3f;
-                canvas.DrawCircle(cx, cy, r, ball);
-                canvas.DrawLine(cx - r, cy, cx + r, cy, ball);
-                canvas.DrawCircle(cx, cy, r * 0.3f, ball);
-                return;
-            }
-            var size = Math.Min(args.Info.Width, args.Info.Height) * 0.92f;
-            var scale = Math.Min(size / bitmap.Width, size / bitmap.Height);
-            var w = bitmap.Width * scale;
-            var h = bitmap.Height * scale;
-            using var image = SKImage.FromBitmap(bitmap);
-            canvas.DrawImage(image,
-                new SKRect((args.Info.Width - w) / 2, (args.Info.Height - h) / 2, (args.Info.Width + w) / 2, (args.Info.Height + h) / 2),
-                new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
-        }
 
         // ── Command plumbing ─────────────────────────────────────────────────────
 
@@ -510,14 +505,10 @@ public static class BankEntryEditor
         {
             switch (button)
             {
-                case PadButton.Up:
-                case PadButton.Left:
-                    Highlight(_focus - 1);
-                    return true;
-                case PadButton.Down:
-                case PadButton.Right:
-                    Highlight(_focus + 1);
-                    return true;
+                case PadButton.Up: Step(-1); return true;
+                case PadButton.Down: Step(1); return true;
+                case PadButton.Left: Jump(0); return true;
+                case PadButton.Right: Jump(1); return true;
                 case PadButton.A:
                     Run(_slots[_focus].Activate);
                     return true;
@@ -532,14 +523,33 @@ public static class BankEntryEditor
             }
         }
 
+        /// <summary>Up or down within the focused column.</summary>
+        private void Step(int direction)
+        {
+            var column = _slots[_focus].Column;
+            for (var i = _focus + direction; i >= 0 && i < _slots.Count; i += direction)
+                if (_slots[i].Column == column) { Highlight(i); return; }
+        }
+
+        /// <summary>To the list (0) or the page (1): the page's first stop, or the open page's tab.</summary>
+        private void Jump(int column)
+        {
+            if (_slots[_focus].Column == column) return;
+            var target = column == 0
+                ? _slots.FindIndex(slot => ReferenceEquals(slot.View, _statsOpen ? _statsTab : _infoTab))
+                : _slots.FindIndex(slot => slot.Column == 1);
+            if (target >= 0) Highlight(target);
+        }
+
         private void Highlight(int index)
         {
             _focus = Math.Clamp(index, 0, _slots.Count - 1);
-            for (var i = 0; i < _slots.Count; i++)
-                _slots[i].Target.SetFocused(i == _focus);
-            var slot = _slots[_focus];
-            if (slot.Scrolls && _scroll.Handler is not null)
-                _ = _scroll.ScrollToAsync(slot.View, ScrollToPosition.MakeVisible, false);
+            foreach (var slot in _sideSlots.Concat(_infoSlots).Concat(_statsSlots))
+                slot.Target.SetFocused(false);
+            var current = _slots[_focus];
+            current.Target.SetFocused(true);
+            if (current.Column == 1 && _scroll.Handler is not null)
+                _ = _scroll.ScrollToAsync(current.View, ScrollToPosition.MakeVisible, false);
         }
 
         private void Close(bool result)
@@ -801,8 +811,8 @@ public static class BankEntryEditor
         private async Task QrAsync()
         {
             var choice = await EditorMenu.ShowAsync(_host, "QR transfer", null,
-                new PadOption("Show as .pk QR", IconPath: "qr"),
-                new PadOption("Scan a .pk QR", IconPath: "scan"));
+                new PadOption("Show as .pk QR", IconPath: "qr", Detail: "Shows this Pokémon as a QR code to scan on another device."),
+                new PadOption("Scan a .pk QR", IconPath: "scan", Detail: "Pick a picture of a QR code; its Pokémon replaces this one."));
             if (choice == "Show as .pk QR") await ShowEntityQrAsync();
             else if (choice == "Scan a .pk QR") await ScanEntityQrAsync();
         }
@@ -837,60 +847,70 @@ public static class BankEntryEditor
         // ── Row and focus chrome ─────────────────────────────────────────────────
 
         /// <summary>
-        /// One fact row of the summary panels: PKSM pixel icon, PixelUI caption, right-set
-        /// value, and the striped-row cursor (indigo-light band).
+        /// One fact row of the Info page in the panel look: a band (dark and light in turn), the
+        /// caption in the label blue, the value; the section chip's look when focused.
         /// </summary>
         private sealed class SummaryRow : Grid, IFocusTarget
         {
             private readonly SKCanvasView _bg;
             private readonly Label _caption;
             private readonly Label _value;
-            private readonly Image _icon;
+            private readonly bool _dark;
             private bool _selected;
 
             public Action? Activated { get; set; }
 
-            public SummaryRow(string caption, string? icon)
+            public SummaryRow(string caption, bool dark)
             {
-                HeightRequest = 36;
-                ColumnDefinitions = [new(new GridLength(10)), new(new GridLength(28)), new(GridLength.Star), new(GridLength.Auto), new(new GridLength(10))];
+                _dark = dark;
+                HeightRequest = EditorRows.Design(64);
+                ColumnDefinitions = [new(new GridLength(EditorRows.Design(34))), new(new GridLength(EditorRows.Design(220))), new(GridLength.Star), new(GridLength.Auto), new(new GridLength(EditorRows.Design(28)))];
                 _bg = new SKCanvasView { InputTransparent = true };
-                _bg.PaintSurface += (_, args) => DsFolderButton.DrawListRow(args.Surface.Canvas, args.Info, _selected);
-                _icon = new Image
+                _bg.PaintSurface += (_, args) =>
                 {
-                    WidthRequest = 18,
-                    HeightRequest = 18,
-                    VerticalOptions = LayoutOptions.Center,
-                    Source = icon is null ? null : PksmIcons.Source(icon),
-                    IsVisible = icon is not null,
+                    var c = args.Surface.Canvas;
+                    c.Clear(SKColors.Transparent);
+                    var r = new SKRect(0, 0, args.Info.Width, args.Info.Height);
+                    if (_selected)
+                    {
+                        using var fill = new SKPaint { Shader = SKShader.CreateLinearGradient(new SKPoint(0, 0), new SKPoint(0, r.Bottom), [EditorPaint.ChipTop, EditorPaint.ChipBottom], SKShaderTileMode.Clamp) };
+                        c.DrawRect(r, fill);
+                        using var rim = new SKPaint { Color = EditorPaint.Cyan, Style = SKPaintStyle.Stroke, StrokeWidth = 3, IsAntialias = true };
+                        c.DrawRect(SKRect.Inflate(r, -1.5f, -1.5f), rim);
+                    }
+                    else
+                    {
+                        using var band = new SKPaint { Color = EditorPaint.RowBand(_dark) };
+                        c.DrawRect(r, band);
+                    }
                 };
                 _caption = new Label
                 {
-                    Text = Kit.Tidy(caption),
+                    Text = caption,
                     FontFamily = Font,
-                    FontSize = UiTokens.TextLabel,
-                    TextColor = UiTokens.InkSoft,
+                    FontSize = EditorRows.EditorText,
+                    TextColor = EditorRows.EditorLabel,
                     VerticalTextAlignment = TextAlignment.Center,
                     LineBreakMode = LineBreakMode.TailTruncation,
                 };
                 _value = new Label
                 {
                     FontFamily = Font,
-                    FontSize = UiTokens.TextBody,
-                    TextColor = UiTokens.Ink0,
+                    FontSize = EditorRows.EditorText,
+                    TextColor = EditorRows.EditorValue,
                     VerticalTextAlignment = TextAlignment.Center,
-                    HorizontalTextAlignment = TextAlignment.End,
                     LineBreakMode = LineBreakMode.TailTruncation,
                     MaxLines = 1,
                 };
+                var chevron = EditorRows.EditorChevron();
                 Children.Add(_bg);
-                Children.Add(_icon);
                 Children.Add(_caption);
                 Children.Add(_value);
+                Children.Add(chevron);
                 Grid.SetColumnSpan(_bg, 5);
-                Grid.SetColumn(_icon, 1);
-                Grid.SetColumn(_caption, 2);
-                Grid.SetColumn(_value, 3);
+                Grid.SetColumn(_caption, 1);
+                Grid.SetColumn(_value, 2);
+                Grid.SetColumn(chevron, 3);
 
                 var tap = new TapGestureRecognizer();
                 tap.Tapped += (_, _) => Activated?.Invoke();
@@ -899,76 +919,83 @@ public static class BankEntryEditor
 
             public string Value { set => _value.Text = value; }
 
-            public string Icon
+            public void SetFocused(bool focused)
+            {
+                if (_selected == focused) return;
+                _selected = focused;
+                _caption.TextColor = focused ? EditorPaint.ChipInk.ToMauiColor() : EditorRows.EditorLabel;
+                _bg.InvalidateSurface();
+            }
+        }
+
+        /// <summary>
+        /// An entry of the side list: a menu row (icon and label); the open page's tab shows a
+        /// cyan bar and label even while the focus is elsewhere.
+        /// </summary>
+        private sealed class SideTab : Grid, IFocusTarget
+        {
+            private readonly SKCanvasView _bg;
+            private readonly Label _label;
+            private bool _focused, _active;
+
+            public Action? Activated { get; set; }
+
+            public SideTab(string label, string icon)
+            {
+                HeightRequest = EditorRows.Design(68);
+                ColumnDefinitions = [new(new GridLength(EditorRows.Design(24))), new(new GridLength(EditorRows.Design(56))), new(GridLength.Star)];
+                _bg = new SKCanvasView { InputTransparent = true };
+                _bg.PaintSurface += (_, args) =>
+                {
+                    DsFolderButton.DrawRow(args.Surface.Canvas, args.Info, _focused);
+                    if (!_active) return;
+                    using var bar = new SKPaint { Color = EditorPaint.Cyan, IsAntialias = true };
+                    var w = Math.Max(4, args.Info.Width * 0.02f);
+                    args.Surface.Canvas.DrawRoundRect(new SKRect(0, args.Info.Height * 0.18f, w, args.Info.Height * 0.82f), w / 2, w / 2, bar);
+                };
+                var image = new Image
+                {
+                    Source = PksmIcons.Source(icon, PksmIcons.Cyan),
+                    WidthRequest = EditorRows.Design(36),
+                    HeightRequest = EditorRows.Design(36),
+                    VerticalOptions = LayoutOptions.Center,
+                    InputTransparent = true,
+                };
+                _label = new Label
+                {
+                    Text = label,
+                    FontFamily = Font,
+                    FontSize = EditorRows.EditorText,
+                    TextColor = UiTokens.Ink0,
+                    VerticalTextAlignment = TextAlignment.Center,
+                    LineBreakMode = LineBreakMode.TailTruncation,
+                };
+                Children.Add(_bg);
+                Children.Add(image);
+                Children.Add(_label);
+                Grid.SetColumnSpan(_bg, 3);
+                Grid.SetColumn(image, 1);
+                Grid.SetColumn(_label, 2);
+                var tap = new TapGestureRecognizer();
+                tap.Tapped += (_, _) => Activated?.Invoke();
+                GestureRecognizers.Add(tap);
+            }
+
+            public bool Active
             {
                 set
                 {
-                    _icon.Source = PksmIcons.Source(value);
-                    _icon.IsVisible = true;
+                    _active = value;
+                    _label.TextColor = value ? EditorPaint.Cyan.ToMauiColor() : UiTokens.Ink0;
+                    _bg.InvalidateSurface();
                 }
             }
 
             public void SetFocused(bool focused)
             {
-                if (_selected == focused) return;
-                _selected = focused;
-                _caption.TextColor = focused ? UiTokens.IndigoInk : UiTokens.InkSoft;
+                if (_focused == focused) return;
+                _focused = focused;
                 _bg.InvalidateSurface();
-            }
-        }
-
-        /// <summary>One zebra-striped line of the stats table: stat, IV, EV, computed value.</summary>
-        private sealed class StatRow : Grid
-        {
-            private readonly Label _iv;
-            private readonly Label _ev;
-            private readonly Label _value;
-
-            public StatRow(int index, string stat)
-            {
-                HeightRequest = 24;
-                ColumnDefinitions = StatColumns();
-                var bg = new SKCanvasView { InputTransparent = true };
-                bg.PaintSurface += (_, args) =>
-                {
-                    if (index % 2 == 1)
-                        PksmPaint.StripeRow(args.Surface.Canvas, new SKRect(0, 0, args.Info.Width, args.Info.Height), false);
-                };
-                Children.Add(bg);
-                var name = new Label
-                {
-                    Text = stat,
-                    FontFamily = Font,
-                    FontSize = UiTokens.TextBody,
-                    TextColor = UiTokens.Ink0,
-                    VerticalTextAlignment = TextAlignment.Center,
-                };
-                _iv = Number();
-                _ev = Number();
-                _value = Number();
-                Children.Add(name);
-                Children.Add(_iv);
-                Children.Add(_ev);
-                Children.Add(_value);
-                Grid.SetColumn(_iv, 1);
-                Grid.SetColumn(_ev, 2);
-                Grid.SetColumn(_value, 3);
-            }
-
-            private static Label Number() => new()
-            {
-                FontFamily = Font,
-                FontSize = UiTokens.TextBody,
-                TextColor = UiTokens.Ink0,
-                HorizontalTextAlignment = TextAlignment.Center,
-                VerticalTextAlignment = TextAlignment.Center,
-            };
-
-            public void Set(int iv, int ev, int? stat)
-            {
-                _iv.Text = iv.ToString();
-                _ev.Text = ev.ToString();
-                _value.Text = stat?.ToString() ?? "-";
             }
         }
 
@@ -987,9 +1014,9 @@ public static class BankEntryEditor
 
             public void SetFocused(bool focused)
             {
-                // The pale focus rim of the selected rows - never a cyan glow.
-                Stroke = focused ? UiTokens.Ink0 : Colors.Transparent;
-                StrokeThickness = focused ? 2 : 2.5;
+                // The cyan rim of the focused fields.
+                Stroke = focused ? EditorPaint.Cyan.ToMauiColor() : Colors.Transparent;
+                StrokeThickness = 2.5;
             }
         }
     }

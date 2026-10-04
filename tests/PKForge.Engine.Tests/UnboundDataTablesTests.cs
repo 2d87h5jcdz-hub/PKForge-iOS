@@ -17,6 +17,25 @@ public sealed class UnboundDataTablesTests
     private static readonly GameStrings Strings = GameInfo.GetStrings("en");
 
     [Theory]
+    [InlineData(4, new[] { 9 })]        // Charmander: Fire (10 in the CFRU order)
+    [InlineData(1, new[] { 11, 3 })]    // Bulbasaur: Grass / Poison
+    [InlineData(35, new[] { 17 })]      // Clefairy: Fairy (23 in the CFRU order)
+    [InlineData(6, new[] { 9, 2 })]     // Charizard: Fire / Flying
+    public void TypesUseTheModernNumbers(int species, int[] types) =>
+        Assert.Equal(types, UnboundData.TypesOf(species));
+
+    [Fact]
+    public void NoHeldItemReadsNone()
+    {
+        Assert.Equal("None", UnboundData.ItemName(0));
+        Assert.Equal("Master Ball", UnboundData.ItemName(1));
+    }
+
+    [Fact]
+    public void RadicalRedSingleTypesAreListedOnce() =>
+        Assert.Equal([11], PKForge.Engine.RadicalRed.RadicalRedData.TypesOf(PKForge.Engine.RadicalRed.RadicalRedData.SpeciesIdByName("Floragato")));
+
+    [Theory]
     [InlineData(1, "Pound", "Pound")]
     [InlineData(136, "High Jump Kick", "High Jump Kick")]     // ROM text is "Hi Jump Kick"
     [InlineData(354, "Psycho Boost", "Psycho Boost")]         // last id shared with retail Gen 3
@@ -165,11 +184,11 @@ public sealed class UnboundDataTablesTests
         Assert.Equal(0, mon.Move3);
         Assert.Contains(mon.Ability, reopened.GetAbilityChoices(903, 0));
 
-        // The .pk3 export speaks PKHeX ids, not the ROM's 369/365.
+        // Sneasler has no Generation 3 counterpart: other games get no PK3 at all, never one
+        // holding a different species or the ROM's 369/365 as move ids.
         var export = reopened.ExportSlot(-1, 0).Data;
-        var pk3 = new PK3(export); // (PK3 cannot hold species past Gen 3; moves are u16)
-        Assert.Equal(434, pk3.Move1);
-        Assert.Equal(370, pk3.Move2);
+        Assert.Null(UnboundEngineSession.ToPk3(new UnboundMon(export, 0, party: false), out var refusal));
+        Assert.Equal("Sneasler does not exist in Generation 3.", refusal);
     }
 
     [Fact]

@@ -95,7 +95,7 @@ public sealed class LegalityAssistService : ILegalityAssistService
         if (!result.IsParsed) return new MoveVerdict(move, true, "Not analyzed");
         var summary = result.Summary(ctx).Trim();
         if (move == 0 && result.Valid) summary = "Empty";
-        return new MoveVerdict(move, result.Valid, summary.Length == 0 ? result.Valid ? "Legal" : "Not legal" : summary);
+        return new MoveVerdict(move, result.Valid, summary.Length == 0 ? result.Valid ? "Legal" : "Illegal" : summary);
     }
 
     // ───────────────────────────── preview / apply ─────────────────────────────

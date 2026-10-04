@@ -19,6 +19,9 @@ public static class AutopilotArt
     private static readonly List<Action> Waiters = [];
     private static readonly object Gate = new();
 
+    // Icons are tinted with theme colors (PksmIcons): a new theme starts a new icon cache.
+    static AutopilotArt() => ColorTheme.Changed += () => { lock (Gate) Icons.Clear(); };
+
     /// <summary>The decoded icon for a game's art label; null while loading (then <paramref name="ready"/> runs) or when none is bundled.</summary>
     public static SKBitmap? Game(string? artLabel, Action? ready)
     {

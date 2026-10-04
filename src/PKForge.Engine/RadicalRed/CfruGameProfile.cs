@@ -54,14 +54,15 @@ internal interface ICfruGameData
 internal readonly record struct CfruSectorBox(int FirstSection, int BlockOffset);
 
 /// <summary>
-/// One CFRU hack as a session sees it: its name, its tables, and how many PC boxes its
-/// build actually saves. Boxes 0-18 always live in the PokemonStorage stream and 19-21
-/// in the raw sector-30/31 region (the engine's LoadSector30And31); anything past that
-/// is per-hack.
+/// One CFRU hack as a session sees it: its name, its tables, the entity format its
+/// exports carry (<see cref="CfruEntity"/>), and how many PC boxes its build actually
+/// saves. Boxes 0-18 always live in the PokemonStorage stream and 19-21 in the raw
+/// sector-30/31 region (the engine's LoadSector30And31); anything past that is per-hack.
 /// </summary>
 internal sealed record CfruGameProfile(
     string GameName,
     string SnapshotTag,
+    string EntityFormat,
     ICfruGameData Data,
     IReadOnlyList<CfruSectorBox> SectorBoxes,
     Func<ReadOnlyMemory<byte>, bool> Detect)

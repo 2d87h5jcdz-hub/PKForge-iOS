@@ -257,19 +257,8 @@ internal static class SummaryChrome
         }
     }
 
-    /// <summary>A type plate: the type colour, a gentle top light, caps name (the games' own badge).</summary>
-    public static void TypeBadge(SKCanvas c, SKRect r, int type)
-    {
-        if (!TypeFacts.IsValid(type) && type != TypeFacts.Stellar) return;
-        var color = InfoKit.TypeColor(type);
-        var body = new SKColor((byte)(color.Red * 255), (byte)(color.Green * 255), (byte)(color.Blue * 255));
-        Gradient(c, r, 3, Lighter(body, 0.12f), Darker(body, 0.08f));
-        Stroke(c, r, 3, Darker(body, 0.28f), 1);
-        var lum = 0.299f * body.Red + 0.587f * body.Green + 0.114f * body.Blue;
-        var ink = lum >= 150 ? Pksm.LogoVoid : SKColors.White;
-        var size = Math.Min(11.5f, r.Height * 0.62f);
-        SummaryInk.Draw(c, TypeFacts.Name(type).ToUpperInvariant(), r.MidX, SummaryInk.Center(r.MidY, size), size, ink, align: SKTextAlign.Center);
-    }
+    /// <summary>A type plate, the one <see cref="TypePlates"/> draws everywhere.</summary>
+    public static void TypeBadge(SKCanvas c, SKRect r, int type) => TypePlates.Paint(c, r, type);
 
     /// <summary>A recessed gauge (base stats): dark track, rounded fill with a lit top edge.</summary>
     public static void Gauge(SKCanvas c, SKRect track, float fraction, SKColor color)

@@ -101,6 +101,22 @@ public sealed class MonInfoTests
         Assert.Equal(0, Info.GetMove(Blank(1), Bite)!.Type);                      // Bite was Normal in Gen 1
     }
 
+    [Theory]
+    [InlineData(1, 11, new[] { 6 })]        // Metapod: Bug, read as Ghost before
+    [InlineData(1, 25, new[] { 12 })]       // Pikachu: Electric, read as no type before
+    [InlineData(1, 1, new[] { 11, 3 })]     // Bulbasaur: Grass / Poison
+    [InlineData(1, 6, new[] { 9, 2 })]      // Charizard: Fire / Flying
+    [InlineData(1, 94, new[] { 7, 3 })]     // Gengar: Ghost / Poison
+    [InlineData(2, 208, new[] { 8, 4 })]    // Steelix: Steel / Ground
+    [InlineData(2, 197, new[] { 16 })]      // Umbreon: Dark
+    [InlineData(3, 11, new[] { 6 })]        // Gen 3 tables already use the modern numbers
+    public void GameBoyTypesUseTheModernNumbers(int generation, int species, int[] types)
+    {
+        using var session = Blank(generation);
+        Assert.Equal(types, session.GetSpeciesTypes(species));
+        Assert.Equal(types, Info.GetSpeciesCard(session, species, 0)!.Types);
+    }
+
     [Fact]
     public void LearnLabelsReadLikeTheGames()
     {
@@ -274,6 +290,19 @@ public sealed class MonInfoTests
     }
 
     // ---------- Helpers ----------
+
+    [Fact]
+    public void ASpeciesWithNoPokemonYetGetsItsLearnableMoves()
+    {
+        // The creation wizard: no Pokémon in a slot, only the species being made.
+        const int Bulbasaur = 1, VineWhip = 22, SolarBeam = 76, Surf = 57;
+        using var session = Blank(7);
+        var moves = Info.GetMoveChoices(session, IMonInfoService.NoSlot, 0, Bulbasaur).ToDictionary(m => m.Id);
+        Assert.Equal(LearnKind.LevelUp, moves[VineWhip].Learn.Kind);
+        Assert.True(moves[VineWhip].Learn.Level > 0);
+        Assert.Equal(LearnKind.Machine, moves[SolarBeam].Learn.Kind);
+        Assert.False(moves[Surf].Learn.IsLegal);
+    }
 
     private static SaveEngineSession Blank(int generation) => (SaveEngineSession)new SaveEngine().OpenBlankSession(generation);
 

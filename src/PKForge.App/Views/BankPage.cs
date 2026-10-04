@@ -9,6 +9,8 @@ using SkiaSharp;
 using SkiaSharp.Views.Maui;
 using SkiaSharp.Views.Maui.Controls;
 
+using static PKForge.App.Views.EditorRows;
+
 namespace PKForge.App.Views;
 
 /// <summary>
@@ -32,7 +34,9 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
     private readonly SKCanvasView _canvas;
     private readonly FrameInvalidator _frame;
     private readonly Grid _hostGrid;
-    private Label _pageLabel = null!;
+    private readonly SKCanvasView _boxBar;
+    private readonly SKCanvasView _panel;
+    private string _boxTitle = "";
     private Label _statusLine = null!;
 
     private int _boxIndex;
@@ -60,53 +64,59 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         _canvas.PaintSurface += Paint;
         _canvas.Touch += Touch;
 
-        // The box info panel: a maroon header strip carrying the page readout,
-        // flanked by the paging buttons and add-box.
-        var previous = Kit.MiniCapsule("<", UiTokens.Ink0);
-        previous.HeightRequest = 32;
-        previous.Clicked += (_, _) => ChangeBox(-1);
-        var next = Kit.MiniCapsule(">", UiTokens.Ink0);
-        next.HeightRequest = 32;
-        next.Clicked += (_, _) => ChangeBox(1);
-        _pageLabel = (Label)((Border)Kit.HeaderBar("00 / 00")).Content!;
-        _pageLabel.HorizontalTextAlignment = TextAlignment.Center;
+        // The box header over the well, as in the storage screen: the chevrons page the
+        // boxes, the banner opens the box overview.
+        _boxBar = new SKCanvasView { HeightRequest = Design(72), Margin = new Thickness(0, 0, 0, Design(28)) };
+        _boxBar.PaintSurface += PaintBoxBar;
+        var boxBarTap = new TapGestureRecognizer();
+        boxBarTap.Tapped += (_, args) => TapBoxBar(args.GetPosition(_boxBar)?.X ?? _boxBar.Width / 2);
+        _boxBar.GestureRecognizers.Add(boxBarTap);
 
-        var addBox = Kit.Capsule("Boxes", UiTokens.Green);
-        addBox.Clicked += (_, _) => _ = OpenBoxOverviewAsync();
-
-        var exportArchive = Kit.Capsule("Export", UiTokens.Green);
-        exportArchive.Clicked += (_, _) => _ = ExportArchiveAsync();
-
-        var importArchive = Kit.Capsule("Import", UiTokens.Indigo);
-        importArchive.Clicked += (_, _) => _ = ImportArchiveAsync();
-
-        var search = Kit.Capsule("Search", UiTokens.MenuBlue);
-        search.Clicked += (_, _) => _ = OpenSearchAsync();
-
-        var livingDex = Kit.Capsule("Living dex", UiTokens.MenuBlue);
-        livingDex.Clicked += (_, _) => _ = OpenLivingDexAsync();
-
-        var strip = new Grid
+        // The side panel: the selected Pokémon in the editor panel's look, the Bank's tools under it.
+        _panel = new SKCanvasView { InputTransparent = true };
+        _panel.PaintSurface += PaintPanel;
+        Button Tool(string text, Action action)
         {
-            Padding = new Thickness(12, 6, 12, 0),
-            ColumnSpacing = 8,
-            ColumnDefinitions =
-            [
-                new(GridLength.Star), new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto),
-                new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto),
-            ],
-            Children = { _pageLabel, previous, next, addBox, exportArchive, importArchive, search, livingDex },
+            var button = EditorTool(text);
+            button.HeightRequest = Design(60);
+            button.FontSize = EditorText * 0.82;
+            button.Padding = new Thickness(Design(6), 0);
+            button.Clicked += (_, _) => action();
+            return button;
+        }
+        // One compact row, so the panel above keeps room for the facts.
+        var tools = new Grid
+        {
+            ColumnSpacing = Design(12),
+            Margin = new Thickness(0, Design(18), 0, 0),
+            ColumnDefinitions = [new(GridLength.Star), new(GridLength.Star), new(new GridLength(1.4, GridUnitType.Star)), new(GridLength.Star), new(GridLength.Star)],
         };
-        Grid.SetColumn(previous, 1);
-        Grid.SetColumn(next, 2);
-        Grid.SetColumn(addBox, 3);
-        Grid.SetColumn(exportArchive, 4);
-        Grid.SetColumn(importArchive, 5);
-        Grid.SetColumn(search, 6);
-        Grid.SetColumn(livingDex, 7);
+        tools.Add(Tool("Boxes", () => _ = OpenBoxOverviewAsync()), 0, 0);
+        tools.Add(Tool("Search", () => _ = OpenSearchAsync()), 1, 0);
+        tools.Add(Tool("Living dex", () => _ = OpenLivingDexAsync()), 2, 0);
+        tools.Add(Tool("Import", () => _ = ImportArchiveAsync()), 3, 0);
+        tools.Add(Tool("Export", () => _ = ExportArchiveAsync()), 4, 0);
 
-        var screen = Kit.LcdPanel(_canvas, padding: 4);
-        var content = new Grid { Padding = new Thickness(12, 8, 12, 10), Children = { screen } };
+        var left = new Grid
+        {
+            RowDefinitions = [new(GridLength.Auto), new(GridLength.Star)],
+            Children = { _boxBar, _canvas },
+        };
+        Grid.SetRow(_canvas, 1);
+        var right = new Grid
+        {
+            RowDefinitions = [new(GridLength.Star), new(GridLength.Auto)],
+            Children = { _panel, tools },
+        };
+        Grid.SetRow(tools, 1);
+        var content = new Grid
+        {
+            Padding = new Thickness(Design(48), Design(32), Design(28), Design(20)),
+            ColumnSpacing = Design(32),
+            ColumnDefinitions = [new(new GridLength(1072, GridUnitType.Star)), new(new GridLength(740, GridUnitType.Star))],
+            Children = { left, right },
+        };
+        Grid.SetColumn(right, 1);
         var bodyHost = new Grid { Children = { DsChrome.GridBackground(), content } };
 
         // The bank's own readout: the organizer's mark count and every action's report.
@@ -133,16 +143,15 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         {
             RowDefinitions =
             [
-                new(GridLength.Auto), new(GridLength.Auto), new(GridLength.Auto),
+                new(GridLength.Auto), new(GridLength.Auto),
                 new(GridLength.Star), new(GridLength.Auto), new(GridLength.Auto),
             ],
-            Children = { DsChrome.TitleBar(), DsChrome.StatusStrip("Bank", "Open"), strip, bodyHost, statusHost, footer },
+            Children = { DsChrome.TitleBar(), DsChrome.StatusStrip("Bank", "Open"), bodyHost, statusHost, footer },
         };
         Grid.SetRow((View)root.Children[1], 1);
-        Grid.SetRow(strip, 2);
-        Grid.SetRow(bodyHost, 3);
-        Grid.SetRow(statusHost, 4);
-        Grid.SetRow(footer, 5);
+        Grid.SetRow(bodyHost, 2);
+        Grid.SetRow(statusHost, 3);
+        Grid.SetRow(footer, 4);
 
         _hostGrid = new Grid { Children = { root } };
         Content = _hostGrid;
@@ -249,8 +258,8 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
     {
         var format = await PadMenu.ShowAsync(_hostGrid, "Export",
             "A .pk folder is read by PKHeX and PKForge; a PKSM bank goes back to your 3DS.",
-            new PadOption("Folder of .pk files", IconPath: "folder"),
-            new PadOption("PKSM bank for the 3DS (.bnk)", IconPath: "bank"));
+            new PadOption("Folder of .pk files", IconPath: "folder", Detail: "One .pk file per Pokémon, readable by PKHeX and PKForge."),
+            new PadOption("PKSM bank for the 3DS (.bnk)", IconPath: "bank", Detail: "One bank file to copy back to PKSM on your 3DS."));
         if (format is null) return;
         if (format.StartsWith("PKSM", StringComparison.Ordinal))
         {
@@ -343,8 +352,8 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
     {
         var format = await PadMenu.ShowAsync(_hostGrid, "Import",
             "From a 3DS: copy /3ds/PKSM/banks/ (or /3ds/PKSM/dumps/) off the SD card to this device, then pick the files.",
-            new PadOption("PKSM bank, dumps zip or .pk files", IconPath: "bank"),
-            new PadOption("Folder of .pk files", IconPath: "folder"));
+            new PadOption("PKSM bank, dumps zip or .pk files", IconPath: "bank", Detail: "Files copied off your 3DS; you see a preview before anything is added."),
+            new PadOption("Folder of .pk files", IconPath: "folder", Detail: "Every .pk file in a folder joins the bank; exact copies are skipped."));
         if (format is null) return;
         if (format.StartsWith("PKSM", StringComparison.Ordinal))
         {
@@ -395,9 +404,13 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
     }
 
 
-    private void UpdatePageLabel() => _pageLabel.Text = BankBoxDecor.Names.Get(_boxIndex) is { } name
-        ? $"{_boxIndex + 1:00} / {_bank.BoxCount:00} · {name}"
-        : $"{_boxIndex + 1:00} / {_bank.BoxCount:00}";
+    private void UpdatePageLabel()
+    {
+        _boxTitle = BankBoxDecor.Names.Get(_boxIndex) is { } name
+            ? $"{_boxIndex + 1:00} / {_bank.BoxCount:00} · {name}"
+            : $"Box {_boxIndex + 1:00} / {_bank.BoxCount:00}";
+        _boxBar.InvalidateSurface();
+    }
 
     private void ChangeBox(int delta)
     {
@@ -668,6 +681,8 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
             _bank.Move(carrying, _boxIndex, _selectedSlot);
             _carryId = null;
             RefreshBoxEntries();
+            // The panel and the lower screen still describe what the slot held before the drop.
+            UpdatePreview();
             UpdateStatus();
             _canvas.InvalidateSurface();
             return;
@@ -694,19 +709,19 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
 
         // Hardcore mode keeps every move and drops every copy: the read-only Summary is always
         // offered, the editor only when editing is allowed; Duplicate and Copy to game are not offered at all.
-        var options = new List<PadOption> { new("Summary", IconPath: "info") };
+        var options = new List<PadOption> { new("Summary", IconPath: "info", Detail: "A read-only look at this Pokémon.") };
         if (Allowed(SaveAction.EditMon))
         {
             options.Add(new PadOption("Edit", IconPath: "editor"));
-            options.Add(new PadOption("Evolve…", IconPath: "evolve"));
+            options.Add(new PadOption("Evolve…", IconPath: "evolve", Detail: "Evolves it right here in the bank."));
         }
-        options.Add(new PadOption("Send to Poképark", IconPath: "park"));
-        if (Allowed(SaveAction.Duplicate)) options.Add(new PadOption("Duplicate", IconPath: "copy"));
-        options.Add(new PadOption("Send to game…", IconPath: "send"));
-        if (Allowed(SaveAction.Duplicate)) options.Add(new PadOption("Copy to game…", IconPath: "copy"));
-        options.Add(new PadOption("Move (carry)", IconPath: "move"));
-        options.Add(new PadOption("Export .pk file", IconPath: "export"));
-        options.Add(new PadOption("Release from bank", IconPath: "release"));
+        options.Add(new PadOption("Send to Poképark", IconPath: "park", Detail: "It joins the Poképark visitors. The bank is not changed."));
+        if (Allowed(SaveAction.Duplicate)) options.Add(new PadOption("Duplicate", IconPath: "copy", Detail: "An exact copy goes into the first free bank slot."));
+        options.Add(new PadOption("Send to game…", IconPath: "send", Detail: "Moves it into a game's boxes and out of the bank."));
+        if (Allowed(SaveAction.Duplicate)) options.Add(new PadOption("Copy to game…", IconPath: "copy", Detail: "Puts a copy in a game's boxes; this one stays in the bank."));
+        options.Add(new PadOption("Move (carry)", IconPath: "move", Detail: "Pick it up and drop it in another slot."));
+        options.Add(new PadOption("Export .pk file", IconPath: "export", Detail: "Saves this Pokémon as a single .pk file."));
+        options.Add(new PadOption("Release from bank", IconPath: "release", Detail: "Removes it from the bank for good; there is no undo."));
         var choice = await PadMenu.ShowAsync(_hostGrid, entry.Info.Nickname,
             Note($"From {entry.Info.SourceName} · Gen {entry.Info.Generation} · deposited {entry.AddedUtc:yyyy-MM-dd}"),
             options.ToArray());
@@ -778,34 +793,34 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
             : "Nothing selected";
         var targets = TransferTargets();
 
-        var options = new List<PadOption> { new("Boxes…", IconPath: "box") };
+        var options = new List<PadOption> { new("Boxes…", IconPath: "box", Detail: "Every box at a glance, to reorder, rename or restyle them.") };
         if (selection.Count > 0)
         {
-            options.Add(new PadOption("Move to another box…", IconPath: "move"));
-            options.Add(new PadOption("Move to a position…", IconPath: "move"));
+            options.Add(new PadOption("Move to another box…", IconPath: "move", Detail: "They fill a box's empty slots, in order."));
+            options.Add(new PadOption("Move to a position…", IconPath: "move", Detail: "They land from a slot you pick; what is there slides back."));
             if (Allowed(SaveAction.Duplicate))
-                options.Add(new PadOption(selection.Count == 1 ? "Duplicate" : "Duplicate all", IconPath: "copy"));
-            options.Add(new PadOption(selection.Count == 1 ? "Export .pk file" : "Export .pk files", IconPath: "export"));
-            options.Add(new PadOption("Export as a PKSM bank", IconPath: "export"));
+                options.Add(new PadOption(selection.Count == 1 ? "Duplicate" : "Duplicate all", IconPath: "copy", Detail: "Each copy goes into the first free bank slot."));
+            options.Add(new PadOption(selection.Count == 1 ? "Export .pk file" : "Export .pk files", IconPath: "export", Detail: "Writes one .pk file each into a folder you pick."));
+            options.Add(new PadOption("Export as a PKSM bank", IconPath: "export", Detail: "Packs them into one bank file for PKSM on the 3DS."));
             if (targets.ConnectedLabel is not null || targets.Detected.Length > 0)
-                options.Add(new PadOption("Send to a game…", IconPath: "send"));
-            options.Add(new PadOption("Release from bank…", IconPath: "release"));
+                options.Add(new PadOption("Send to a game…", IconPath: "send", Detail: "Moves them into a game; only those that arrive leave the bank."));
+            options.Add(new PadOption("Release from bank…", IconPath: "release", Detail: "Removes them from the bank for good; there is no undo."));
         }
         if (_anchor is not null && _anchor != (_boxIndex, _selectedSlot))
-            options.Add(new PadOption("Mark range to here", IconPath: "range"));
+            options.Add(new PadOption("Mark range to here", IconPath: "range", Detail: "Marks every Pokémon from your last mark to the cursor."));
         options.Add(new PadOption("Mark everything in this box", IconPath: "selectall"));
-        options.Add(new PadOption("Invert marks in this box", IconPath: "invert"));
+        options.Add(new PadOption("Invert marks in this box", IconPath: "invert", Detail: "Marked Pokémon in this box are unmarked, the rest marked."));
         options.Add(new PadOption("Mark the whole bank", IconPath: "selectall"));
-        options.Add(new PadOption("Mark by filter…", IconPath: "filter"));
+        options.Add(new PadOption("Mark by filter…", IconPath: "filter", Detail: "Search the bank and mark what matches."));
         if (_marked.Count > 0) options.Add(new PadOption("Clear marks", IconPath: "deselect"));
-        options.Add(new PadOption($"Sort box {_boxIndex + 1:00}…", IconPath: "sort"));
-        options.Add(new PadOption("Sort the whole bank…", IconPath: "sort"));
-        if (_marked.Count > 1) options.Add(new PadOption("Sort the marked into boxes…", IconPath: "sort"));
-        options.Add(new PadOption("Compact the bank (close gaps)", IconPath: "compact"));
+        options.Add(new PadOption($"Sort box {_boxIndex + 1:00}…", IconPath: "sort", Detail: "Reorders this box by dex number, level, type and more."));
+        options.Add(new PadOption("Sort the whole bank…", IconPath: "sort", Detail: "Reorders every Pokémon in the bank by the order you pick."));
+        if (_marked.Count > 1) options.Add(new PadOption("Sort the marked into boxes…", IconPath: "sort", Detail: "The marked move, sorted, into new boxes after the last one used."));
+        options.Add(new PadOption("Compact the bank (close gaps)", IconPath: "compact", Detail: "Fills every empty slot from box 1 on, keeping the order."));
         options.Add(new PadOption($"Rename box {_boxIndex + 1:00}…", IconPath: "rename"));
         options.Add(new PadOption($"Wallpaper for box {_boxIndex + 1:00}…", IconPath: "fashion"));
         if (_bank.BoxCount > 1)
-            options.Add(new PadOption($"Delete box {_boxIndex + 1:00}…", IconPath: "delete"));
+            options.Add(new PadOption($"Delete box {_boxIndex + 1:00}…", IconPath: "delete", Detail: "Its Pokémon move to free slots in other boxes first."));
 
         var choice = await PadMenu.ShowAsync(_hostGrid, $"Bank actions · {noun}",
             Note(_marked.Count > 0
@@ -937,15 +952,16 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
     /// <summary>Keepsakes: the selection is copied, each copy landing in the first gap.</summary>
     private void DuplicateSelection(List<BankEntry> selection)
     {
-        var cloned = 0;
-        foreach (var entry in selection)
+        // One index write: every copy lands, or none does.
+        try { _bank.AddMany([.. selection.Select(e => new BankDeposit(_bank.GetData(e.Id), e.Info))]); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            _bank.Add(_bank.GetData(entry.Id), entry.Info);
-            cloned++;
+            _boxViewModel.Status = $"Nothing was cloned: {error.Message}";
+            return;
         }
         FinishOrganizer(selection.Count == 1
             ? $"{selection[0].Info.Nickname} cloned in the bank."
-            : $"{cloned} Pokémon cloned in the bank.");
+            : $"{selection.Count} Pokémon cloned in the bank.");
     }
 
     private async Task ReleaseSelectionAsync(List<BankEntry> selection)
@@ -961,10 +977,10 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
     }
 
     /// <summary>
-    /// Sends the whole selection to one game. The connected save takes them into its empty
-    /// slots in a single safe write; any other detected game receives them one at a time
-    /// through the transfer service, previewed once. Only mons that arrived leave the bank;
-    /// every write goes through the same validate → backup → atomic path as the boxes.
+    /// Sends the whole selection to one game, all or none. The connected save or any other
+    /// detected game takes every one in a single safe write (validate → backup → atomic), previewed
+    /// once, or nothing is written when one cannot enter; only then does the selection leave the
+    /// bank in one index write, and if the bank cannot let go the game gives them back.
     /// </summary>
     private async Task SendSelectionToGameAsync(List<BankEntry> selection)
     {
@@ -975,83 +991,63 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         var picked = await PickDestinationAsync($"{selection.Count} selected → pick the destination");
         if (picked is not { } destinationPick) return;
 
-        var sent = new List<Guid>();
-        var destination = destinationPick.Label;
+        var items = selection.Select(e => new PKForge.Engine.TransferItem(_bank.GetData(e.Id), e.Info.Format, e.Info.Nickname)).ToArray();
+        var ids = selection.Select(e => e.Id).ToArray();
+        var subject = selection.Count == 1 ? selection[0].Info.Nickname : $"{selection.Count} Pokémon";
+        PKForge.Engine.BatchTransferOutcome outcome;
         if (destinationPick.Other is null)
         {
-            var rooms = _boxViewModel.Save?.Slots.Where(s => s.Species is null)
-                .OrderBy(s => s.Box).ThenBy(s => s.Slot).ToList();
-            if (rooms is not { Count: > 0 })
+            const string destination = "the connected game";
+            var open = SlotPlanning.FreeSlotsFrom(_boxViewModel.Save?.Slots ?? [], null).ToArray();
+            if (open.Length == 0)
             {
                 _boxViewModel.Status = "No empty slot in the connected game.";
                 return;
             }
-            var open = rooms.ToArray();
             // Same trust step as a game-to-game send: the first mon's diff and warnings
             // (a backwards conversion lists its compromises) stand for the batch.
-            var firstPick = selection[0];
-            var connectedPreview = transfer.PreviewIntoConnected(_bank.GetData(firstPick.Id), firstPick.Info.Nickname, open[0].Box, open[0].Slot, firstPick.Info.Format);
-            if (!await Services.TransferPreviewPrompt.ConfirmAsync(_hostGrid, connectedPreview,
-                    selection.Count == 1 ? firstPick.Info.Nickname : $"{selection.Count} Pokémon", "the connected game"))
+            var connectedPreview = transfer.PreviewIntoConnected(items[0].Data, items[0].Nickname, open[0].Box, open[0].Slot, items[0].Format);
+            if (!await Services.TransferPreviewPrompt.ConfirmAsync(_hostGrid, connectedPreview, subject, destination))
                 return;
-            var ok = await _boxViewModel.RunMutationAsync(session =>
-            {
-                var placed = 0;
-                foreach (var entry in selection)
+            var rooms = open.Take(items.Length).ToArray();
+            outcome = await PKForge.Engine.BankTransfers.WithdrawAsync(_bank, ids, destination,
+                async () => await _boxViewModel.RunMutationAsync(session =>
+                    PKForge.Engine.BankTransfers.ImportAll(session, items, rooms, out var refusal) is var failed and >= 0
+                        ? new GenerationOutcome(false, failed >= items.Length
+                            ? $"the connected game has room for {rooms.Length} of {items.Length} Pokémon."
+                            : refusal is null
+                                ? Services.TransferService.Refusal(items[failed].Data, items[failed].Nickname, session.Snapshot, destination, items[failed].Format)
+                                : $"{items[failed].Nickname} cannot go to {destination}. {refusal}")
+                        : new GenerationOutcome(true, $"{subject} joined the game."),
+                    Math.Max(0, _selectedSlot), refreshSlot: false, action: SaveAction.Move) ? null : _boxViewModel.Status,
+                async () => await _boxViewModel.RunMutationAsync(session =>
                 {
-                    if (placed >= open.Length) break;
-                    var room = open[placed];
-                    if (!Services.TransferService.TryImport(session, room.Box, room.Slot, _bank.GetData(entry.Id), out _, entry.Info.Format)) continue;
-                    sent.Add(entry.Id);
-                    placed++;
-                }
-                return placed == 0
-                    ? new GenerationOutcome(false, "None of the selection can enter this game's format.")
-                    : new GenerationOutcome(true, $"{placed} of {selection.Count} joined the game.");
-            }, Math.Max(0, _selectedSlot), refreshSlot: false, action: SaveAction.Move);
-            if (!ok) return;
-            destination = "the connected game";
+                    foreach (var room in rooms) session.ReleaseSlot(room.Box, room.Slot);
+                    return new GenerationOutcome(true, $"{subject} went back to the bank.");
+                }, Math.Max(0, _selectedSlot), refreshSlot: false, action: SaveAction.Move) ? null : _boxViewModel.Status);
         }
         else
         {
             var target = destinationPick.Other;
-            var first = selection[0];
-            var preview = await transfer.PreviewAsync(_bank.GetData(first.Id), first.Info.Nickname, target, format: first.Info.Format);
-            if (!await Services.TransferPreviewPrompt.ConfirmAsync(_hostGrid, preview,
-                    selection.Count == 1 ? first.Info.Nickname : $"{selection.Count} Pokémon", target.GameLabel))
+            var preview = await transfer.PreviewAsync(items[0].Data, items[0].Nickname, target, format: items[0].Format);
+            if (!await Services.TransferPreviewPrompt.ConfirmAsync(_hostGrid, preview, subject, target.GameLabel))
                 return;
-            string? stopped = null;
-            foreach (var entry in selection)
-            {
-                try
+            IReadOnlyList<SlotRef> landed = [];
+            outcome = await PKForge.Engine.BankTransfers.WithdrawAsync(_bank, ids, target.GameLabel,
+                async () =>
                 {
-                    var outcome = await transfer.SendToGameAsync(_bank.GetData(entry.Id), entry.Info.Nickname, target, format: entry.Info.Format);
-                    if (outcome.Success) sent.Add(entry.Id);
-                }
-                catch (Exception error)
+                    (var refusal, landed) = await transfer.SendManyToGameAsync(items, target, $"{subject} arrived from the bank");
+                    return refusal;
+                },
+                async () =>
                 {
-                    // Every mon already written to the game still leaves the bank below: no duplicates.
-                    stopped = error.Message;
-                    break;
-                }
-            }
-            if (sent.Count == 0)
-            {
-                _boxViewModel.Status = stopped is null
-                    ? $"None of the selection could enter {target.GameLabel}'s format."
-                    : $"Aborted: {stopped}";
-                return;
-            }
-            if (stopped is not null)
-            {
-                _bank.RemoveMany(sent);
-                FinishOrganizer($"{sent.Count} of {selection.Count} Pokémon left the bank for {destination}, then it stopped: {stopped}");
-                return;
-            }
+                    await transfer.ReleaseFromGameAsync(target, landed, $"{subject} went back to the bank");
+                    return null;
+                });
         }
 
-        _bank.RemoveMany(sent);
-        FinishOrganizer($"{sent.Count} of {selection.Count} Pokémon left the bank for {destination}.");
+        if (outcome.Success || outcome.Duplicated) FinishOrganizer(outcome.Message);
+        else _boxViewModel.Status = outcome.Message;
     }
 
     /// <summary>
@@ -1348,6 +1344,11 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
     private async Task EvolveEntryAsync(BankEntry entry)
     {
         if (await DeniedAsync(SaveAction.EditMon)) return;
+        if (PKForge.Engine.EntityBytes.RomHackGame(entry.Info.Format) is { } hack)
+        {
+            await PadMenu.ShowAsync(_hostGrid, "Evolution", $"Pokémon from {hack} can only be evolved in their own game.", "OK");
+            return;
+        }
         var services = IPlatformApplication.Current!.Services;
         var engine = services.GetRequiredService<ISaveEngine>();
         var service = services.GetRequiredService<IEvolutionService>();
@@ -1395,10 +1396,10 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         // mode fills the vault only by moving mons in from a save.
         if (await DeniedAsync(SaveAction.CreateMon)) return;
         var choice = await PadMenu.ShowAsync(_hostGrid, "Add to bank", null,
-            new PadOption("Create a Pokémon", IconPath: "create"),
-            new PadOption("Paste a Showdown set", IconPath: "script"),
-            new PadOption("Import .pk file", IconPath: "import"),
-            new PadOption("Scan a .pk QR", IconPath: "scan"));
+            new PadOption("Create a Pokémon", IconPath: "create", Detail: "Build a legal Pokémon step by step."),
+            new PadOption("Paste a Showdown set", IconPath: "script", Detail: "Turns a Pokémon Showdown text set into a Pokémon."),
+            new PadOption("Import .pk file", IconPath: "import", Detail: "Adds Pokémon from .pk files you pick."),
+            new PadOption("Scan a .pk QR", IconPath: "scan", Detail: "Pick a picture of a .pk QR code to add its Pokémon."));
         switch (choice)
         {
             case "Create a Pokémon" or "Paste a Showdown set" when session is null:
@@ -1464,17 +1465,29 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
                 var access = IPlatformApplication.Current?.Services.GetService<ISaveFileAccess>();
                 if (picker is null || access is null) return;
                 var documents = await picker.PickManyAsync();
-                var count = 0;
+                if (documents.Count == 0) return;
                 var engine = IPlatformApplication.Current!.Services.GetRequiredService<ISaveEngine>();
+                // All or none: every file is read first, then the bank takes them in one write.
+                var deposits = new List<BankDeposit>(documents.Count);
                 foreach (var document in documents)
                 {
                     var bytes = (await access.ReadAsync(document.DocumentId)).ToArray();
-                    var parsed = engine.TryDescribeEntity(bytes, document.DisplayName, document.DisplayName); // the extension names the format
-                    if (parsed is null) continue;
-                    _bank.Add(bytes, parsed);
-                    count++;
+                    if (engine.TryDescribeEntity(bytes, document.DisplayName, document.DisplayName) is not { } parsed) // the extension names the format
+                    {
+                        _boxViewModel.Status = $"Nothing was deposited: {document.DisplayName} is not a recognizable Pokémon.";
+                        return;
+                    }
+                    deposits.Add(new BankDeposit(bytes, parsed));
                 }
-                _boxViewModel.Status = count > 0 ? $"Deposited {count} Pokémon into the bank." : "No recognizable Pokémon in those files.";
+                try
+                {
+                    _bank.AddMany(deposits);
+                    _boxViewModel.Status = $"Deposited {deposits.Count} Pokémon into the bank.";
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    _boxViewModel.Status = $"Nothing was deposited: {error.Message}";
+                }
                 RefreshBoxEntries();
                 _canvas.InvalidateSurface();
                 return;
@@ -1569,75 +1582,64 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
 
     // The grid chrome (wallpaper flat, crosshair, slots, selection) all comes from
     // BoxGridRenderer and PksmPaint - one paint language, zero duplicated constants.
-    private void Paint(object? sender, SKPaintSurfaceEventArgs args)
+    // The box header's height in the mockup: its unit is its height over this.
+    private const float HeaderDesignHeight = 72f;
+
+    private void PaintBoxBar(object? sender, SKPaintSurfaceEventArgs args)
     {
         var canvas = args.Surface.Canvas;
-        var info = args.Info;
-        var wallpaper = BankBoxArt.Tone(_boxIndex);
-        LayOut(info);
-        canvas.Clear(Pksm.Housing);
-        using (var clip = new SKRoundRect(_boxArea, _boxArea.Height * 0.02f))
-        {
-            canvas.Save();
-            canvas.ClipRoundRect(clip, antialias: true);
-            BankBoxArt.Paint(canvas, _boxArea, _boxIndex, _frame.Request);
-            canvas.Restore();
-        }
-        if (_infoArea.Width > 0) PaintInfoPanel(canvas, _infoArea);
-
-        // The box keeps its real 6 × 5 proportions; slots are laid out inside it.
-        canvas.Save();
-        canvas.Translate(_boxArea.Left, _boxArea.Top);
-        var boxSize = _boxArea.Size;
-        var cell = BoxGridRenderer.GridMetrics(boxSize).Cell;
-        var entries = _boxEntries;
-        for (var index = 0; index < Columns * Rows; index++)
-        {
-            var rect = BoxGridRenderer.SlotRect(boxSize, index);
-            var has = entries.TryGetValue(index, out var entry);
-            PksmPaint.Slot(canvas, rect, wallpaper, empty: !has);
-            if (!has)
-            {
-                if (index == _selectedSlot)
-                    PksmPaint.Selection(canvas, rect);
-                continue;
-            }
-
-            // The one in hand leaves a ghost behind; a dropped one still settling is drawn by the hand.
-            var isCarried = _carryId == entry!.Id;
-            var settling = _hand.IsLandingOn(index);
-            if (isCarried) canvas.SaveLayer(BoxGridRenderer.GhostPaint);
-            if (!settling) DrawEntrySprite(canvas, rect, entry);
-            if (isCarried)
-            {
-                canvas.Restore();
-                PksmPaint.CarryGhost(canvas, rect);
-            }
-            if (entry.Info.Shiny && !settling)
-                BoxGridRenderer.DrawSparkle(canvas, rect.Right - rect.Width * 0.14f, rect.Top + rect.Height * 0.16f,
-                    Math.Min(rect.Width, rect.Height) * 0.09f, BoxGridRenderer.SparklePaint);
-            if (!isCarried && !settling && _facts.HeldItem(entry) != 0)
-                BoxGridRenderer.DrawHeldItemBadge(canvas, rect);
-            if (_marked.Contains((_boxIndex, index)))
-                PksmPaint.MarkBadge(canvas, rect);
-            if (index == _selectedSlot)
-                PksmPaint.Selection(canvas, rect);
-        }
-
-        // The Pokémon in hand follows the cursor from slot to slot.
-        var cursorRect = BoxGridRenderer.SlotRect(boxSize, _selectedSlot);
-        var origin = _boxEntries.Values.FirstOrDefault(e => e.Id == _carryId) is { } source
-            ? BoxGridRenderer.SlotRect(boxSize, source.Slot)
-            : cursorRect;
-        var carried = CarriedEntry();
-        _hand.Sync(carried is not null, origin, cursorRect, _selectedSlot, _boxIndex);
-        if (_hand.Draw(canvas, cell, (c, r) =>
-            {
-                if (carried is not null) DrawEntrySprite(c, r, carried);
-            }))
-            _frame.Request();
-        canvas.Restore();
+        canvas.Clear(SKColors.Transparent);
+        var unit = args.Info.Height / HeaderDesignHeight;
+        using var font = new SKFont(BoxBrowserPage.PixelTypeface(), 34f * unit);
+        StoragePaint.BoxHeader(canvas, new SKRect(0, 0, args.Info.Width, args.Info.Height), _boxTitle, font,
+            canPrev: _boxIndex > 0, canNext: _boxIndex < _bank.BoxCount - 1, unit);
     }
+
+    private void TapBoxBar(double x)
+    {
+        var cap = Math.Max(44, StoragePaint.BannerRect(new SKRect(0, 0, (float)_boxBar.Width, (float)_boxBar.Height),
+            (float)_boxBar.Height / HeaderDesignHeight).Left);
+        if (x < cap) ChangeBox(-1);
+        else if (x > _boxBar.Width - cap) ChangeBox(1);
+        else _ = OpenBoxOverviewAsync();
+    }
+
+    /// <summary>
+    /// The box in the storage look (<see cref="BoxGridRenderer.PaintScene"/>): Pokémon standing
+    /// on their rows, the light-pool cursor, the Pokémon in hand; the box's own Bank wallpaper
+    /// under a navy veil.
+    /// </summary>
+    private void Paint(object? sender, SKPaintSurfaceEventArgs args)
+    {
+        var slots = new SlotSummary[Columns * Rows];
+        for (var index = 0; index < slots.Length; index++)
+            slots[index] = _boxEntries.TryGetValue(index, out var entry) ? Slot(entry, index) : new SlotSummary(_boxIndex, index, null, null, false, true);
+        var carried = CarriedEntry();
+        var origin = _boxEntries.Values.FirstOrDefault(e => e.Id == _carryId) is { } source ? source.Slot : (int?)null;
+        var scene = new BoxGridRenderer.StorageScene(slots, _selectedSlot, origin,
+            carried is null ? null : Slot(carried, _selectedSlot), Marking: false,
+            index => _marked.Contains((_boxIndex, index)), _ => null, _boxIndex);
+        BoxGridRenderer.PaintScene(args.Surface.Canvas, args.Info, scene, _sprites, _frame.Request, _hand, (c, well, unit) =>
+        {
+            // A wallpaper picture goes through the save boxes' painter (frame cropped, the
+            // player's Box background style); a flat colour tints the well.
+            if (BankBoxArt.Art(_boxIndex, _frame.Request) is { } art)
+            {
+                using var image = SKImage.FromBitmap(art.Art);
+                StoragePaint.Wallpaper(c, well, image, art.Average, BoxBackground.Style, unit);
+                return;
+            }
+            var inner = SKRect.Inflate(well, -3 * unit, -3 * unit);
+            using var tint = new SKPaint { Color = PksmPaint.Mix(BankBoxArt.Tone(_boxIndex), StoragePaint.Well, 0.7f), IsAntialias = true };
+            c.DrawRoundRect(inner, 25 * unit, 25 * unit, tint);
+        });
+        _panel.InvalidateSurface();
+    }
+
+    /// <summary>A Bank entry as a storage slot (what the box painter draws).</summary>
+    private SlotSummary Slot(BankEntry entry, int slot) =>
+        new(_boxIndex, slot, entry.Info.Species, entry.Info.Nickname, entry.Info.Shiny, true, entry.Info.Form,
+            HeldItem: _facts.HeldItem(entry), Traits: entry.Info.Traits ?? default);
 
     private readonly CarryHand _hand = new();
 
@@ -1651,51 +1653,11 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         return _carriedEntry;
     }
 
-    private void DrawEntrySprite(SKCanvas canvas, SKRect rect, BankEntry entry)
-    {
-        var bitmap = _sprites.GetSprite(entry.Info.Look);
-        if (bitmap is null)
-        {
-            _sprites.Warm(entry.Info.Look, _frame.Request);
-            return;
-        }
-        var inset = rect.Width * 0.03f;
-        var box = SKRect.Inflate(rect, -inset, -inset);
-        var scale = Math.Min(box.Width / bitmap.Width, box.Height / bitmap.Height);
-        var w = bitmap.Width * scale;
-        var h = bitmap.Height * scale;
-        using var image = SKImage.FromBitmap(bitmap);
-        canvas.DrawImage(image, new SKRect(rect.MidX - w / 2, rect.MidY - h / 2, rect.MidX + w / 2, rect.MidY + h / 2), BoxGridRenderer.SpriteSampling);
-    }
+    // ── The side panel ─────────────────────────────────────────────────────
 
-    // ── Layout and the side panel ──────────────────────────────────────────
-
-    private SKRect _boxArea;
-    private SKRect _infoArea;
     private Guid? _factFor;
     private int _factPick;
     private IDispatcherTimer? _factTimer;
-
-    /// <summary>
-    /// The box on the left at its true 6 × 5 shape (a wallpaper is never stretched), the
-    /// side panel in the room that is left; a narrow screen keeps just the centered box.
-    /// </summary>
-    private void LayOut(SKImageInfo info)
-    {
-        var pad = info.Height * 0.03f;
-        var cell = Math.Min((info.Height - pad * 2) / Rows, (info.Width * 0.6f - pad * 2) / Columns);
-        var width = cell * Columns;
-        var height = cell * Rows;
-        var room = info.Width - width - pad * 3;
-        if (room < info.Height * 0.6f)
-        {
-            _boxArea = SKRect.Create((info.Width - width) / 2, (info.Height - height) / 2, width, height);
-            _infoArea = SKRect.Empty;
-            return;
-        }
-        _boxArea = SKRect.Create(pad, (info.Height - height) / 2, width, height);
-        _infoArea = new SKRect(_boxArea.Right + pad, _boxArea.Top, info.Width - pad, _boxArea.Bottom);
-    }
 
     // The panel's full summary of the selected entry, decoded in the background.
     private MonSummary? _panelSummary;
@@ -1748,30 +1710,32 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
     }
 
     /// <summary>
-    /// The selected Pokémon at a glance, built from the chrome kit only: one panel, the cobalt
-    /// header strip, the Pokémon in a window onto the box's own wallpaper, striped menu rows,
-    /// and one of its Pokédex entries (a different one every visit and every little while).
-    /// The name bar and the type badges carry the Pokémon's type colors. Rows that do not fit
-    /// are left out rather than squeezed.
+    /// The selected Pokémon at a glance. The Bank keeps its own identity inside the panel
+    /// look: the name and species tabs and a soft wash take the Pokémon's first type colour,
+    /// its HOME render stands in a lit card beside the facts, and one of its Pokédex entries
+    /// (a different one every visit and every little while) sits in a card along the bottom.
+    /// Rows that do not fit are left out rather than squeezed.
     /// </summary>
-    private void PaintInfoPanel(SKCanvas canvas, SKRect pixels)
+    private void PaintPanel(object? sender, SKPaintSurfaceEventArgs args)
     {
-        const float text = 16f; // NDS12 is drawn at multiples of 16
-        const float rowHeight = 26f;
-        var density = _canvas.Width > 0 ? _canvas.CanvasSize.Width / (float)_canvas.Width : 1;
+        var canvas = args.Surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+        var bounds = new SKRect(0, 0, args.Info.Width, args.Info.Height);
+        var unit = args.Info.Width / EditorPaint.DesignWidth;
+        StoragePaint.WellPanel(canvas, bounds, unit);
+        const float text = 30, rowHeight = 60;
+        var width = EditorPaint.DesignWidth;
+        var height = args.Info.Height / unit;
+        var face = BoxBrowserPage.PixelTypeface();
         canvas.Save();
-        canvas.Scale(density);
-        var area = new SKRect(pixels.Left / density, pixels.Top / density, pixels.Right / density, pixels.Bottom / density);
-        SummaryChrome.Panel(canvas, area);
-        var inner = SKRect.Inflate(area, -10, -10);
-        var header = new SKRect(inner.Left, inner.Top, inner.Right, inner.Top + 30);
+        canvas.Scale(unit);
 
         if (EntryAt(_selectedSlot) is not { } entry)
         {
             var count = _boxEntries.Count;
-            SummaryChrome.Strip(canvas, header, BankBoxDecor.Label(_boxIndex), size: text,
-                trailing: $"{count} / {IBankService.SlotsPerBox}", trailingColor: SKColors.White);
-            SummaryInk.Draw(canvas, count == 0 ? "This box is empty." : "An empty space.", inner.Left + 4, header.Bottom + 28, text, Pksm.InkSoft);
+            EditorPaint.PaintSection(canvas, new SKRect(0, 40, width, 104), _boxTitle, face, 1);
+            SummaryInk.Draw(canvas, count == 0 ? "This box is empty." : $"An empty space · {count} / {IBankService.SlotsPerBox} in this box",
+                width / 2, SummaryInk.Center(150, text), text, EditorPaint.ExpInk, align: SKTextAlign.Center);
             canvas.Restore();
             return;
         }
@@ -1781,116 +1745,113 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         var species = summary?.SpeciesName
             ?? ((uint)info.Species < (uint)_data.SpeciesNames.Count ? _data.SpeciesNames[info.Species] : $"#{info.Species}");
         var name = summary?.DisplayName ?? (string.IsNullOrWhiteSpace(info.Nickname) ? species : info.Nickname);
+        SKColor? accent = summary?.Types is { Count: > 0 } types ? InfoKit.TypeColor(types[0]).ToSKColor() : null;
 
-        // ── Header: name, then the PKSM gender and shiny icons; level on the right ──
-        var level = $"Lv. {info.Level}";
-        var levelWidth = SummaryInk.Width(level, text, bold: true);
-        var shownName = SummaryInk.Fit(name, text, header.Width - levelWidth - 70, bold: true);
-        // The name bar wears the Pokémon's first type, like the games' summary headers.
-        var tint = summary?.Types is { Count: > 0 } types ? PksmPaint.Darker(ToSk(InfoKit.TypeColor(types[0])), 0.3f) : (SKColor?)null;
-        SummaryChrome.Strip(canvas, header, shownName, accent: tint, size: text, trailing: level, trailingColor: SKColors.White);
-        var iconX = header.Left + 10 + SummaryInk.Width(shownName, text, bold: true) + 6;
-        foreach (var icon in HeaderIcons(summary?.Gender, info.Shiny))
+        // A soft wash of the type colour down from the top.
+        if (accent is { } wash)
         {
-            if (AutopilotArt.Icon(icon) is not { } bitmap) continue;
-            using var image = SKImage.FromBitmap(bitmap);
-            canvas.DrawImage(image, SKRect.Create(iconX, header.MidY - 8, 16, 16), BoxGridRenderer.SpriteSampling);
-            iconX += 18;
+            using var shader = SKShader.CreateLinearGradient(new SKPoint(0, 0), new SKPoint(0, height * 0.75f),
+                [wash.WithAlpha(70), wash.WithAlpha(0)], SKShaderTileMode.Clamp);
+            using var paint = new SKPaint { Shader = shader, IsAntialias = true };
+            canvas.DrawRoundRect(new SKRect(3, 3, width - 3, height - 3), 25, 25, paint);
         }
+        var from = string.IsNullOrWhiteSpace(info.SourceName) ? $"Gen {info.Generation}" : $"From {info.SourceName}";
+        EditorPaint.PaintHeader(canvas, new SKRect(0, 0, width, EditorPaint.DesignHeaderHeight),
+            new EditorPaint.Header(name, info.Level, info.Shiny, summary?.Gender ?? -1, species, from, accent), face, 1);
 
-        // ── Pokédex entry along the bottom, as tall as its text ──
-        var (dexLines, version) = DexEntryLines(entry.Id, info.Species, text, inner.Width - 8);
-        var dexHeight = dexLines.Count == 0 ? 0 : 8 + dexLines.Count * SummaryInk.Leading(text);
-        var dex = new SKRect(inner.Left, inner.Bottom - dexHeight, inner.Right, inner.Bottom);
-        if (dexLines.Count > 0) PaintDexEntry(canvas, dex, dexLines, version, text);
-        var body = new SKRect(inner.Left, header.Bottom + 8, inner.Right, dexLines.Count > 0 ? dex.Top - 8 : inner.Bottom);
+        // The Pokédex entry card along the bottom, as tall as its text.
+        const float dexText = 28;
+        var (dexLines, version) = DexEntryLines(entry.Id, info.Species, dexText, width - 100);
+        var dexHeight = dexLines.Count == 0 ? 0 : 40 + dexLines.Count * SummaryInk.Leading(dexText);
+        var dexTop = height - 24 - dexHeight;
 
-        // ── The Pokémon, in a window onto this box's wallpaper ──
-        var window = new SKRect(body.Left, body.Top, body.Left + Math.Min(body.Width * 0.4f, body.Height), body.Bottom);
-        using (var clip = new SKRoundRect(window, 4, 4))
-        {
-            canvas.Save();
-            canvas.ClipRoundRect(clip, antialias: true);
-            BankBoxArt.Paint(canvas, window, _boxIndex, _frame.Request);
-            canvas.Restore();
-            using var bezel = new SKPaint { Color = Pksm.PaperEdge, Style = SKPaintStyle.Stroke, StrokeWidth = 2, IsAntialias = true };
-            canvas.DrawRoundRect(clip, bezel);
-        }
-        // One look for the whole visit (the index already has the traits): switching to the
-        // summary's look halfway would start a second load. The pixel sprite only stands in
-        // when no HOME render will come; while it loads, the window stays empty for a blink.
-        var look = info.Look;
-        var home = _sprites.GetHome(look);
-        if (home is null) _sprites.WarmHome(look, _frame.Request);
-        var standIn = home is null && _sprites.HomeUnavailable(look);
-        var picture = home ?? (standIn ? _sprites.GetSprite(look) : null);
-        if (standIn && picture is null) _sprites.Warm(look, _frame.Request);
-        if (picture is not null)
-        {
-            var side = Math.Min(window.Width, window.Height) - 12;
-            var scale = side / Math.Max(picture.Width, picture.Height);
-            var w = picture.Width * scale;
-            var h = picture.Height * scale;
-            using var image = SKImage.FromBitmap(picture);
-            canvas.DrawImage(image, new SKRect(window.MidX - w / 2, window.MidY - h / 2, window.MidX + w / 2, window.MidY + h / 2),
-                home is null ? BoxGridRenderer.SpriteSampling : new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
-        }
+        // The HOME render in a lit card on the left; the facts on the right.
+        var top = EditorPaint.DesignHeaderHeight + 18;
+        var bottom = (dexLines.Count > 0 ? dexTop : height) - 18;
+        var portrait = new SKRect(24, top, 280, Math.Min(bottom, top + 330));
+        PaintPortrait(canvas, portrait, info.Look, accent);
 
-        // ── Striped rows: label on the left, value on the right ──
-        var rows = new SKRect(window.Right + 10, body.Top, body.Right, body.Bottom);
-        var lines = new List<(string Label, Action<SKRect> Value)>();
-        void Text(string label, string? value) => lines.Add((label, r =>
-            SummaryInk.Draw(canvas, SummaryInk.Fit(value ?? "None", text, r.Width - 8), r.Right - 8, SummaryInk.Center(r.MidY, text), text, Pksm.Ink, align: SKTextAlign.Right)));
-
-        Text($"No. {info.Species:000}", DexFacts.Default.Genus(info.Species) ?? species);
+        var rows = new List<(string Label, Action<float> Value)>();
+        const float labelX = 304, valueX = 440;
+        void Text(string label, string? value) => rows.Add((label, cy =>
+            SummaryInk.Draw(canvas, SummaryInk.Fit(value ?? "None", text, width - valueX - 24), valueX, SummaryInk.Center(cy, text), text, EditorPaint.Value)));
+        Text($"No.{info.Species:000}", DexFacts.Default.Genus(info.Species) ?? species);
         if (summary is not null)
         {
             if (summary.Types.Count > 0)
-                lines.Add(("Type", r =>
+                rows.Add(("Type", cy =>
                 {
-                    var x = r.Right - 8;
-                    for (var t = summary.Types.Count - 1; t >= 0; t--)
+                    var x = valueX;
+                    foreach (var type in summary.Types)
                     {
-                        SummaryChrome.TypeBadge(canvas, new SKRect(x - 64, r.MidY - 9, x, r.MidY + 9), summary.Types[t]);
-                        x -= 70;
+                        TypePlates.Paint(canvas, new SKRect(x, cy - 19, x + 124, cy + 19), type);
+                        x += 134;
                     }
                 }));
             Text("Nature", summary.NatureName);
             Text("Ability", summary.AbilityName);
             Text("Item", summary.HeldItem > 0 ? summary.HeldItemName : "None");
-            Text("OT", summary.TrainerId is { } tid ? $"{summary.OriginalTrainer} {tid:00000}" : summary.OriginalTrainer);
-            lines.Add(("Ball", r =>
+            Text("OT", summary.TrainerId is { } tid ? $"{summary.OriginalTrainer} · {tid:00000}" : summary.OriginalTrainer);
+            rows.Add(("Ball", cy =>
             {
-                var ballName = SummaryInk.Fit(summary.BallName, text, r.Width - 34);
-                var nameWidth = SummaryInk.Draw(canvas, ballName, r.Right - 8, SummaryInk.Center(r.MidY, text), text, Pksm.Ink, align: SKTextAlign.Right);
-                var ball = _sprites.GetBall(summary.Ball);
-                if (ball is null) _sprites.WarmBall(summary.Ball, _frame.Request);
-                else
+                var x = valueX;
+                if (_sprites.GetBall(summary.Ball) is { } ball)
                 {
                     using var ballImage = SKImage.FromBitmap(ball);
-                    canvas.DrawImage(ballImage, SKRect.Create(r.Right - 8 - nameWidth - 22, r.MidY - 8, 16, 16), BoxGridRenderer.SpriteSampling);
+                    canvas.DrawImage(ballImage, SKRect.Create(x, cy - 20, 40, 40), BoxGridRenderer.SpriteSampling);
+                    x += 52;
                 }
+                else _sprites.WarmBall(summary.Ball, _frame.Request);
+                SummaryInk.Draw(canvas, SummaryInk.Fit(summary.BallName, text, width - x - 24), x, SummaryInk.Center(cy, text), text, EditorPaint.Value);
             }));
         }
-
-        var fit = Math.Max(1, (int)(rows.Height / rowHeight));
-        var y = rows.Top;
-        for (var index = 0; index < Math.Min(fit, lines.Count); index++)
+        var y = top;
+        for (var i = 0; i < rows.Count && y + rowHeight <= bottom; i++)
         {
-            var row = new SKRect(rows.Left, y, rows.Right, y + rowHeight);
-            if (index % 2 == 0) PksmPaint.StripeRow(canvas, row, selected: false);
-            SummaryInk.Draw(canvas, lines[index].Label, row.Left + 8, SummaryInk.Center(row.MidY, text), text, Pksm.InkSoft);
-            lines[index].Value(row);
+            using (var band = new SKPaint { Color = EditorPaint.RowBand(i % 2 == 0) }) canvas.DrawRect(new SKRect(292, y, width - 3, y + rowHeight), band);
+            SummaryInk.Draw(canvas, rows[i].Label, labelX, SummaryInk.Center(y + rowHeight / 2, text), text, EditorPaint.Label);
+            rows[i].Value(y + rowHeight / 2);
             y += rowHeight;
+        }
+
+        if (dexLines.Count > 0)
+        {
+            var card = new SKRect(24, dexTop, width - 24, height - 24);
+            using (var fill = new SKPaint { Color = ColorTheme.Current.DexCard.WithAlpha(235), IsAntialias = true }) canvas.DrawRoundRect(card, 18, 18, fill);
+            using (var rim = new SKPaint { Color = (accent is { } a ? PksmPaint.Mix(a, SKColors.White, 0.2f) : EditorPaint.Cyan).WithAlpha(170), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3 })
+                canvas.DrawRoundRect(SKRect.Inflate(card, -1.5f, -1.5f), 18, 18, rim);
+            PaintDexEntry(canvas, SKRect.Inflate(card, -26, -20), dexLines, version, dexText);
         }
         canvas.Restore();
     }
 
-    private static IEnumerable<string> HeaderIcons(int? gender, bool shiny)
+    /// <summary>
+    /// The HOME render on a card lit in the type colour; the pixel sprite stands in only when
+    /// no render will come, and while it loads the card stays empty for a blink.
+    /// </summary>
+    private void PaintPortrait(SKCanvas canvas, SKRect card, SpriteLook look, SKColor? accent)
     {
-        if (gender is 0) yield return "ui:icon_male.png";
-        if (gender is 1) yield return "ui:icon_female.png";
-        if (shiny) yield return "ui:icon_shiny.png";
+        var glow = accent ?? EditorPaint.Cyan;
+        using (var shader = SKShader.CreateRadialGradient(new SKPoint(card.MidX, card.MidY + card.Height * 0.12f), card.Width * 0.75f,
+                   [PksmPaint.Mix(glow, SKColors.White, 0.1f).WithAlpha(120), PksmPaint.Mix(glow, StoragePaint.Well, 0.75f).WithAlpha(230)], SKShaderTileMode.Clamp))
+        using (var fill = new SKPaint { Shader = shader, IsAntialias = true })
+            canvas.DrawRoundRect(card, 22, 22, fill);
+        using (var rim = new SKPaint { Color = PksmPaint.Mix(glow, SKColors.White, 0.3f).WithAlpha(200), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3 })
+            canvas.DrawRoundRect(SKRect.Inflate(card, -1.5f, -1.5f), 22, 22, rim);
+
+        var home = _sprites.GetHome(look);
+        if (home is null) _sprites.WarmHome(look, _frame.Request);
+        var standIn = home is null && _sprites.HomeUnavailable(look);
+        var picture = home ?? (standIn ? _sprites.GetSprite(look) : null);
+        if (standIn && picture is null) _sprites.Warm(look, _frame.Request);
+        if (picture is null) return;
+        var side = Math.Min(card.Width, card.Height) - 24;
+        var scale = side / Math.Max(picture.Width, picture.Height);
+        var w = picture.Width * scale;
+        var h = picture.Height * scale;
+        using var image = SKImage.FromBitmap(picture);
+        canvas.DrawImage(image, new SKRect(card.MidX - w / 2, card.MidY - h / 2, card.MidX + w / 2, card.MidY + h / 2),
+            home is null ? BoxGridRenderer.SpriteSampling : new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
     }
 
     private const int DexMaxLines = 3;
@@ -1930,17 +1891,16 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         return (wrapped[pick], entries[pick].Version);
     }
 
-    /// <summary>The entry under a hairline, its game's name in the soft ink closing the last line.</summary>
+    /// <summary>The entry's text in bright ink, its game's name closing the last line.</summary>
     private static void PaintDexEntry(SKCanvas canvas, SKRect area, List<string> lines, string version, float size)
     {
-        SummaryChrome.Divider(canvas, area.Left, area.Right, area.Top);
-        var y = area.Top + 6 + size;
+        var y = area.Top + size;
         foreach (var line in lines)
         {
-            SummaryInk.Draw(canvas, line, area.Left + 4, y, size, Pksm.Ink);
+            SummaryInk.Draw(canvas, line, area.Left, y, size, Pksm.Ink);
             y += SummaryInk.Leading(size);
         }
-        SummaryInk.Draw(canvas, $"Pokémon {version}", area.Right - 4, y - SummaryInk.Leading(size), size, Pksm.InkSoft, align: SKTextAlign.Right);
+        SummaryInk.Draw(canvas, $"Pokémon {version}", area.Right, y - SummaryInk.Leading(size), size, EditorPaint.Cyan, align: SKTextAlign.Right);
     }
 
     private static SKColor ToSk(Color color) =>
@@ -1958,9 +1918,9 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
 
     private void RotateFact(object? sender, EventArgs e)
     {
-        if (EntryAt(_selectedSlot) is null || _infoArea.Width <= 0) return;
+        if (EntryAt(_selectedSlot) is null) return;
         _factPick++;
-        _canvas.InvalidateSurface();
+        _panel.InvalidateSurface();
     }
 
     private void Touch(object? sender, SKTouchEventArgs args)
@@ -1969,7 +1929,7 @@ public sealed class BankPage : ContentPage, IPadPagingHandler
         if (args.ActionType != SKTouchAction.Released) return;
         args.Handled = true;
 
-        var slot = BoxGridRenderer.SlotFromTouch(_boxArea.Size, new SKPoint(args.Location.X - _boxArea.Left, args.Location.Y - _boxArea.Top));
+        var slot = BoxGridRenderer.StorageSlotFromTouch(_canvas.CanvasSize, args.Location);
         if (slot < 0) return;
 
         var wasSelected = _selectedSlot == slot;

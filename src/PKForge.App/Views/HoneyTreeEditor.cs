@@ -63,9 +63,9 @@ public static class HoneyTreeEditor
 
         var actions = new List<PadOption>();
         if (tree.IsMunchlaxTree)
-            actions.Add(new PadOption(MunchlaxReady, Accent: UiTokens.Green));
-        actions.Add(new PadOption(Slather));
-        actions.Add(new PadOption(SetEncounter));
+            actions.Add(new PadOption(MunchlaxReady, Accent: UiTokens.Green, Detail: "Puts a Munchlax in this tree, ready to catch."));
+        actions.Add(new PadOption(Slather, Detail: "Spreads honey so the tree's Pokémon can be caught right away."));
+        actions.Add(new PadOption(SetEncounter, Detail: "Choose which Pokémon this tree attracts."));
         actions.Add(new PadOption(SetShakes));
         var choice = await EditorMenu.ShowAsync(host, tree.Location, detail, actions.ToArray());
         switch (choice)

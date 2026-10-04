@@ -6,6 +6,8 @@ namespace PKForge.Engine;
 /// <summary>Adapts the pinned PKHeX.Core save parser without leaking engine types.</summary>
 public sealed class SaveEngine : IFormatAwareSaveEngine
 {
+    static SaveEngine() => LegalityRules.Apply();
+
     /// <summary>
     /// Opens through the user's chosen route, but only when the bytes carry that layout:
     /// the stock engine on a CFRU save (or a CFRU engine on a retail one) would corrupt
@@ -113,6 +115,9 @@ public sealed class SaveEngine : IFormatAwareSaveEngine
 
     public BankEntryInfo? TryDescribeEntity(byte[] bytes, string sourceName, string? format = null)
     {
+        // A CFRU mon is described from its own game's tables: most of its species have no PK3 at all.
+        if (RadicalRed.CfruEntity.Recognize(format) is { } name)
+            return RadicalRed.CfruEntity.Describe(bytes, name, sourceName);
         var entity = EntityBytes.Parse(bytes, format);
         if (entity is null || entity.Species == 0) return null;
         return new BankEntryInfo(entity.Species, entity.Form, entity.IsShiny,
@@ -122,6 +127,10 @@ public sealed class SaveEngine : IFormatAwareSaveEngine
 
     public ISaveEngineSession? OpenEntitySession(byte[] entityBytes, string? displayName = null, string? format = null)
     {
+        // A CFRU mon is read in its own game's session, never as its PK3 view: an edit
+        // saved from that view would replace the exact record with the lossy conversion.
+        if (RadicalRed.CfruEntity.Recognize(format) is { } cfru)
+            return RadicalRed.CfruEntity.Host(entityBytes, cfru, displayName);
         var entity = EntityBytes.Parse(entityBytes, format);
         if (entity is null || entity.Species == 0)
             return null; // genuinely not an editable Pokémon

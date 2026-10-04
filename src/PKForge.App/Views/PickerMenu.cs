@@ -44,6 +44,8 @@ public sealed class PickerMenu : IPadHandler
     // Show enough that a gamepad user (no touch keyboard) can d-pad to any entry; the
     // CollectionView virtualizes, so a larger cap is cheap.
     private const int MaxVisible = 1200;
+    private const double PreviewWidth = 280; // the preview card's column beside the list
+    private const double SideBySideWidth = 700; // the narrowest host that fits both columns
 
     private readonly TaskCompletionSource<PickItem?> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IReadOnlyList<PickItem> _all;
@@ -56,6 +58,11 @@ public sealed class PickerMenu : IPadHandler
     private readonly PickerFilter? _filter;
     private readonly Label? _filterLabel;
     private bool _filterOn;
+    // Lists of moves can be cut to one type (X): every type present in the list is offered.
+    private readonly bool _hasTypes;
+    private int? _typeFilter;
+    private Label? _typeLabel;
+    private Border? _typeChip;
     private string _query = "";
     private List<PickItem> _filtered;
     private int _index;
@@ -74,6 +81,7 @@ public sealed class PickerMenu : IPadHandler
         // The current value always stays reachable: a filter that would hide it starts off.
         _filterOn = filter is not null && filter.StartOn
             && (currentId is not { } cur || items.FirstOrDefault(x => x.Id == cur) is not { } held || filter.Keep(held));
+        _hasTypes = items.Count(x => x.TypeId is not null) > 1;
         _filtered = Filter("");
         _router = IPlatformApplication.Current?.Services.GetService<GamepadRouter>();
 
@@ -107,19 +115,37 @@ public sealed class PickerMenu : IPadHandler
             searchRow = row;
             PaintFilterChip();
         }
+        if (_hasTypes)
+        {
+            _typeLabel = new Label
+            {
+                FontFamily = DsChrome.PixelFont, FontSize = UiTokens.TextLabel,
+                VerticalTextAlignment = TextAlignment.Center, LineBreakMode = LineBreakMode.NoWrap,
+            };
+            var chip = Kit.Tab("");
+            chip.Content = _typeLabel;
+            chip.Padding = new Thickness(12, 0);
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += (_, _) => _ = ChooseTypeAsync();
+            chip.GestureRecognizers.Add(tap);
+            _typeChip = chip;
+            var row = new Grid { ColumnSpacing = 8, ColumnDefinitions = [new(GridLength.Star), new(GridLength.Auto)], Children = { searchRow, chip } };
+            Grid.SetColumn(chip, 1);
+            searchRow = row;
+            PaintTypeChip();
+        }
 
         _list = new CollectionView
         {
             SelectionMode = SelectionMode.Single,
             ItemsSource = _filtered,
-            ItemTemplate = new DataTemplate(() => BuildRow(livePreview is null ? null : this)),
+            ItemTemplate = new DataTemplate(() => BuildRow(this)),
         };
         _list.SelectionChanged += (_, args) =>
         {
-            if (_padSelecting) { _padSelecting = false; UpdatePreview(); return; } // pad only moves the highlight
-            if (_livePreview is not null) return; // preview rows own their taps (OnRowTapped)
-            if (args.CurrentSelection.FirstOrDefault() is PickItem picked)
-                Close(picked);
+            // The pad only moves the highlight; taps are the rows' own (OnRowTapped), since the
+            // list reports nothing for a tap on the row that is already selected.
+            if (_padSelecting) { _padSelecting = false; UpdatePreview(); }
         };
 
         // The list is the Star row so it fills the host-capped window and scrolls itself -
@@ -133,9 +159,11 @@ public sealed class PickerMenu : IPadHandler
             VerticalTextAlignment = TextAlignment.Center,
             LineBreakMode = LineBreakMode.TailTruncation,
         };
-        var hints = filter is null
-            ? Kit.WindowHints(("A", "PICK", livePreview is null ? null : PickHighlighted), ("B", "Cancel", () => Close(null)))
-            : Kit.WindowHints(("A", "PICK", livePreview is null ? null : PickHighlighted), ("Y", "Filter", ToggleFilter), ("B", "Cancel", () => Close(null)));
+        var hintList = new List<(string, string, Action?)> { ("A", "PICK", livePreview is null ? null : PickHighlighted) };
+        if (_hasTypes) hintList.Add(("X", "Type", () => _ = ChooseTypeAsync()));
+        if (filter is not null) hintList.Add(("Y", "Filter", ToggleFilter));
+        hintList.Add(("B", "Cancel", () => Close(null)));
+        var hints = Kit.WindowHints([.. hintList]);
         var previewBar = Kit.Well(_preview, padding: 4);
         previewBar.Padding = new Thickness(10, 4);
         // The selected-item preview used to be layered over the controller hints in a
@@ -146,7 +174,24 @@ public sealed class PickerMenu : IPadHandler
             Padding = new Thickness(0, 3, 0, 0),
             Children = { previewBar, hints },
         };
-        if (livePreview is not null) hintRow.Children.Insert(0, livePreview.Panel);
+        // On a wide screen the preview card sits beside the list so the list keeps the full
+        // height; on a narrow one it goes under the list, above the hints.
+        var side = livePreview is not null && host.Width >= SideBySideWidth;
+        View body = _list;
+        if (livePreview is not null && side)
+        {
+            livePreview.Panel.VerticalOptions = LayoutOptions.Start;
+            var columns = new Grid
+            {
+                ColumnSpacing = 12,
+                ColumnDefinitions = [new(GridLength.Star), new(new GridLength(PreviewWidth))],
+                Children = { _list, livePreview.Panel },
+            };
+            Grid.SetColumn(livePreview.Panel, 1);
+            body = columns;
+        }
+        else if (livePreview is not null)
+            hintRow.Children.Insert(0, livePreview.Panel);
 
         var content = new Grid
         {
@@ -157,15 +202,15 @@ public sealed class PickerMenu : IPadHandler
             {
                 Kit.HeaderBar(Kit.Tidy(title)),
                 searchRow,
-                _list,
+                body,
                 hintRow,
             },
         };
         Grid.SetRow(searchRow, 1);
-        Grid.SetRow(_list, 2);
+        Grid.SetRow(body, 2);
         Grid.SetRow(hintRow, 3);
 
-        var window = Kit.OverlayWindow(host, content, preferredMaxWidth: 520, scroll: false);
+        var window = Kit.OverlayWindow(host, content, preferredMaxWidth: side ? 520 + PreviewWidth + 12 : 520, scroll: false);
         _overlay = Kit.AttachOverlay(host, window, () => Close(null));
         search.Unfocus(); // the pad drives first; touch users tap the box to type
 
@@ -178,7 +223,7 @@ public sealed class PickerMenu : IPadHandler
         _router?.Push(this);
     }
 
-    private static View BuildRow(PickerMenu? tapOwner)
+    private static View BuildRow(PickerMenu tapOwner)
     {
         var icon = new Image { WidthRequest = 26, HeightRequest = 26, IsVisible = false, VerticalOptions = LayoutOptions.Center };
         icon.SetBinding(Image.SourceProperty, new Binding(nameof(PickItem.IconPath)));
@@ -233,12 +278,9 @@ public sealed class PickerMenu : IPadHandler
             Margin = new Thickness(0, 0, 0, 3),
             Content = row,
         };
-        if (tapOwner is not null)
-        {
-            var tap = new TapGestureRecognizer();
-            tap.Tapped += (_, _) => { if (cell.BindingContext is PickItem item) tapOwner.OnRowTapped(item); };
-            cell.GestureRecognizers.Add(tap);
-        }
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += (_, _) => { if (cell.BindingContext is PickItem item) tapOwner.OnRowTapped(item); };
+        cell.GestureRecognizers.Add(tap);
         VisualStateManager.SetVisualStateGroups(cell, new VisualStateGroupList
         {
             new VisualStateGroup
@@ -268,6 +310,7 @@ public sealed class PickerMenu : IPadHandler
     {
         IEnumerable<PickItem> source = _all;
         if (_filterOn && _filter is not null) source = source.Where(_filter.Keep);
+        if (_typeFilter is { } type) source = source.Where(x => x.Id == 0 || x.TypeId == type);
         if (!string.IsNullOrWhiteSpace(query))
             source = source.Where(x => x.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
                                        || (x.Keywords?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false));
@@ -283,6 +326,30 @@ public sealed class PickerMenu : IPadHandler
         _filterOn = !_filterOn;
         PaintFilterChip();
         Refilter(keep);
+    }
+
+    /// <summary>Cuts the list to one type, picked from the types the list holds.</summary>
+    private async Task ChooseTypeAsync()
+    {
+        if (!_hasTypes) return;
+        const string All = "All types";
+        var types = _all.Where(x => x.TypeId is not null).Select(x => x.TypeId!.Value).Distinct().Order().ToList();
+        var options = new List<PadOption> { new(All, IconPath: "all") };
+        options.AddRange(types.Select(t => new PadOption(TypeFacts.Name(t), Glyph: "●", Accent: InfoKit.TypeColor(t))));
+        var choice = await PadMenu.ShowAsync(_host, "Move type", null, [.. options]);
+        if (choice is null) return;
+        var keep = _index >= 0 && _index < _filtered.Count ? _filtered[_index].Id : (int?)null;
+        _typeFilter = choice == All ? null : types.FirstOrDefault(t => TypeFacts.Name(t) == choice, -1) is var found and >= 0 ? found : null;
+        PaintTypeChip();
+        Refilter(keep);
+    }
+
+    private void PaintTypeChip()
+    {
+        if (_typeChip is null || _typeLabel is null) return;
+        _typeLabel.Text = _typeFilter is { } t ? $"✓ {TypeFacts.Name(t)}" : "Type: All";
+        Kit.SetTab(_typeChip, _typeFilter is not null, _typeFilter is { } type ? InfoKit.TypeColor(type) : null);
+        _typeLabel.TextColor = _typeFilter is not null ? UiTokens.SelectInk : UiTokens.Ink0;
     }
 
     private void PaintFilterChip()
@@ -311,6 +378,7 @@ public sealed class PickerMenu : IPadHandler
             case PadButton.A: PickHighlighted(); return true;
             case PadButton.B: Close(null); return true;
             case PadButton.Y: ToggleFilter(); return true;
+            case PadButton.X: _ = ChooseTypeAsync(); return true;
             default: return true; // the picker owns the pad while open
         }
     }
@@ -325,11 +393,15 @@ public sealed class PickerMenu : IPadHandler
     private bool _padSelecting;
     private bool _armed; // preview mode: the highlighted row was aimed by a tap
 
-    /// <summary>Preview mode: the first tap aims (the panel follows), a second tap on the same row picks.</summary>
+    /// <summary>
+    /// A tap picks the row at once; in preview mode the first tap aims (the panel follows) and
+    /// a second tap on the same row picks.
+    /// </summary>
     private void OnRowTapped(PickItem item)
     {
         var tapped = _filtered.IndexOf(item);
         if (tapped < 0) return;
+        if (_livePreview is null) { Close(item); return; }
         if (tapped == _index && _armed) { Close(item); return; }
         _index = tapped;
         HighlightCurrent(scroll: false);
@@ -345,9 +417,14 @@ public sealed class PickerMenu : IPadHandler
     {
         if (_filtered.Count == 0) return;
         _index = Math.Clamp(_index, 0, _filtered.Count - 1);
-        _padSelecting = true;
         _armed = false;
-        _list.SelectedItem = _filtered[_index];
+        // Only a real change raises SelectionChanged; a flag set for no event would swallow the next tap.
+        var target = _filtered[_index];
+        if (!Equals(_list.SelectedItem, target))
+        {
+            _padSelecting = true;
+            _list.SelectedItem = target;
+        }
         if (scroll) _list.ScrollTo(_index, position: ScrollToPosition.Center, animate: false);
         UpdatePreview();
     }

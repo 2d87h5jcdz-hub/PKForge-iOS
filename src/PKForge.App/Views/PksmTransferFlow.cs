@@ -90,8 +90,8 @@ public static class PksmTransferFlow
         foreach (var note in notes) preview.Append('\n').Append(note);
         preview.Append("\nExact copies of mons already in the bank are skipped.");
         var choice = await PadMenu.ShowAsync(host, $"Import {plans.Sum(p => p.ReadyCount)} pokémon?", preview.ToString().Trim(),
-            new PadOption("Add as new boxes (keep layout + names)", IconPath: "box"),
-            new PadOption("Merge into free slots", IconPath: "compact"));
+            new PadOption("Add as new boxes (keep layout + names)", IconPath: "box", Detail: "New boxes after your last used one, with the same slots and box names."),
+            new PadOption("Merge into free slots", IconPath: "compact", Detail: "Fills the Bank's first free slots. Box layout and names are not kept."));
         if (choice is null) return "PKSM import cancelled.";
         var mode = choice.StartsWith("Add", StringComparison.Ordinal) ? PksmImportMode.NewBoxes : PksmImportMode.Merge;
 

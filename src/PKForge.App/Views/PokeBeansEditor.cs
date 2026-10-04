@@ -23,8 +23,8 @@ public static class PokeBeansEditor
             }
 
             var options = beans.Select(bean => new PadOption($"{bean.Name} · {bean.Count}/{bean.MaxCount}"))
-                .Append(new PadOption("Fill every Bean stack", IconPath: "fill"))
-                .Append(new PadOption("Clear every Bean stack", IconPath: "clear"))
+                .Append(new PadOption("Fill every Bean stack", IconPath: "fill", Detail: "Every Bean goes to its maximum; a restore point is made first."))
+                .Append(new PadOption("Clear every Bean stack", IconPath: "clear", Detail: "Every Bean goes to 0; a restore point is made first."))
                 .ToArray();
             var choice = await EditorMenu.ShowAsync(host, "POKé BEANS", "Poké Pelago storage", options);
             if (choice is null) return;

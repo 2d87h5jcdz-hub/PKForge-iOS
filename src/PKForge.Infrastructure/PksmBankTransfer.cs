@@ -268,7 +268,7 @@ public static class PksmBankTransfer
             : new PksmImportItem(box, slot, label, null, null, decoded.Reason ?? "unreadable");
 
     /// <summary>
-    /// Writes plans into the bank. Exact byte copies of mons already in the bank (or earlier in
+    /// Writes plans into the bank in one write: every mon lands, or none does. Exact byte copies of mons already in the bank (or earlier in
     /// this import) are skipped as duplicates, so importing the same bank twice is harmless.
     /// In <see cref="PksmImportMode.NewBoxes"/> each source starts in the first box after the
     /// bank's last occupied box and keeps its slots; source box names are applied there.
@@ -278,11 +278,12 @@ public static class PksmBankTransfer
         var known = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in bank.GetAll()) known.Add(Sha256Hex(bank.GetData(entry.Id)));
 
-        var imported = 0;
         var duplicates = 0;
         var existing = bank.GetAll();
         var nextBox = existing.Count == 0 ? 0 : existing.Max(e => e.Box) + 1;
         var firstNewBox = nextBox;
+        var deposits = new List<BankDeposit>();
+        var names = new List<(int Box, string? Name)>();
 
         foreach (var plan in plans)
         {
@@ -296,37 +297,34 @@ public static class PksmBankTransfer
 
             if (mode == PksmImportMode.Merge)
             {
-                foreach (var item in ready) bank.Add(item.Bytes!, item.Info!);
-                imported += ready.Count;
+                deposits.AddRange(ready.Select(item => new BankDeposit(item.Bytes!, item.Info!)));
                 continue;
             }
 
             // Target layout: a bank keeps box/slot (boxes renumbered from the first used one
             // so a bank whose first boxes are empty does not leave empty boxes behind); loose
             // files are packed in order.
-            var placements = new List<(Guid, int, int)>(ready.Count);
             var firstSourceBox = plan.IsBank ? ready.Min(i => i.Box) : 0;
+            var lastBox = nextBox;
             for (var i = 0; i < ready.Count; i++)
             {
                 var item = ready[i];
-                var entry = bank.Add(item.Bytes!, item.Info!);
                 var (box, slot) = plan.IsBank
                     ? (nextBox + item.Box - firstSourceBox, item.Slot)
                     : (nextBox + i / PksmBankFile.SlotsPerBox, i % PksmBankFile.SlotsPerBox);
-                placements.Add((entry.Id, box, slot));
+                deposits.Add(new BankDeposit(item.Bytes!, item.Info!, box, slot));
+                lastBox = Math.Max(lastBox, box);
             }
-            bank.Place(placements);
-            imported += ready.Count;
-
-            var lastBox = placements.Max(p => p.Item2);
-            if (plan.IsBank && boxNames is not null)
-            {
-                boxNames.SetMany(Enumerable.Range(firstSourceBox, lastBox - nextBox + 1)
+            if (plan.IsBank)
+                names.AddRange(Enumerable.Range(firstSourceBox, lastBox - nextBox + 1)
                     .Select(b => (nextBox + b - firstSourceBox, (string?)plan.BoxNames[b])));
-            }
             nextBox = lastBox + 1;
         }
-        return new PksmImportResult(imported, duplicates, firstNewBox, mode == PksmImportMode.NewBoxes ? nextBox - firstNewBox : 0);
+
+        // Every plan lands in one bank write, all or nothing; names follow only once it did.
+        bank.AddMany(deposits);
+        if (boxNames is not null && names.Count > 0) boxNames.SetMany(names);
+        return new PksmImportResult(deposits.Count, duplicates, firstNewBox, mode == PksmImportMode.NewBoxes ? nextBox - firstNewBox : 0);
     }
 
     /// <summary>

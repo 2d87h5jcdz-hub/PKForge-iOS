@@ -26,8 +26,6 @@ public sealed class HomePage : ContentPage, IPadHandler
     {
         _viewModel = viewModel;
         BindingContext = viewModel;
-        _viewModel.LinkReported += (title, message) =>
-            MainThread.BeginInvokeOnMainThread(() => _ = PadMenu.ShowAsync(_hostGrid, title, message, "OK"));
         Title = "PKForge";
         BackgroundColor = UiTokens.Housing;
         NavigationPage.SetHasNavigationBar(this, false);
@@ -157,10 +155,13 @@ public sealed class HomePage : ContentPage, IPadHandler
     }
 
     /// <summary>
-    /// Fires <paramref name="onLongPress"/> once a finger rests on <paramref name="view"/>
-    /// for the platform long-press timeout without drifting past the touch slop.
+    /// Handles touch on <paramref name="view"/> from the native touch stream: a press released
+    /// within the touch slop is a tap, one that rests for the platform long-press timeout is a
+    /// long press. Both live here because subscribing to the native stream replaces the
+    /// listener a MAUI tap recognizer relies on, so a recognizer on the same view never fires.
+    /// A drag that scrolls the shelf cancels the press.
     /// </summary>
-    private static void AttachLongPress(View view, Action onLongPress)
+    private static void AttachPress(View view, Action onTap, Action onLongPress)
     {
         view.HandlerChanged += (_, _) =>
         {
@@ -168,44 +169,52 @@ public sealed class HomePage : ContentPage, IPadHandler
             var slop = Android.Views.ViewConfiguration.Get(platform.Context!)!.ScaledTouchSlop;
             var timeout = Android.Views.ViewConfiguration.LongPressTimeout;
             var token = 0;
+            var pressing = false;
             float downX = 0, downY = 0;
             platform.Touch += (_, e) =>
             {
-                // Handled is left as the other subscribers set it: the tap recognizer
-                // shares this stream and must keep receiving the whole gesture.
                 var motion = e.Event!;
                 switch (motion.ActionMasked)
                 {
                     case Android.Views.MotionEventActions.Down:
                         var pressed = ++token;
+                        pressing = true;
                         downX = motion.GetX();
                         downY = motion.GetY();
                         view.Dispatcher.DispatchDelayed(TimeSpan.FromMilliseconds(timeout), () =>
                         {
-                            if (pressed != token) return;
-                            token++;
+                            if (pressed != token || !pressing) return;
+                            pressing = false;
                             platform.PerformHapticFeedback(Android.Views.FeedbackConstants.LongPress);
                             onLongPress();
                         });
                         break;
                     case Android.Views.MotionEventActions.Move:
                         if (Math.Abs(motion.GetX() - downX) > slop || Math.Abs(motion.GetY() - downY) > slop)
-                            token++;
+                            pressing = false;
                         break;
                     case Android.Views.MotionEventActions.Up:
+                        token++;
+                        if (pressing) onTap();
+                        pressing = false;
+                        break;
                     case Android.Views.MotionEventActions.Cancel:
                         token++;
+                        pressing = false;
                         break;
                 }
+                e.Handled = true;
             };
         };
     }
 
-    private bool _welcomeShown;
-    private bool _scannedOnce;
-    private bool _updateCheckQueued;
+    // Once per launch, not per page: a color scheme change rebuilds Home, and the new page
+    // must not scan, welcome or check for updates again.
+    private static bool _welcomeShown;
+    private static bool _scannedOnce;
+    private static bool _updateCheckQueued;
     private bool _isAppearing;
-    private bool _resumeSubscribed;
+    private bool _eventsSubscribed;
     private AvailableAppUpdate? _pendingAuthorizedUpdate;
 
     /// <summary>The Thor's lower screen is on from launch - the app *is* dual-screen.</summary>
@@ -224,10 +233,11 @@ public sealed class HomePage : ContentPage, IPadHandler
         // The lower screen shows the shelf's highlighted game while Home is in front.
         _secondClaim ??= IPlatformApplication.Current?.Services.GetService<SecondScreenState>()?.Routes.CreateClaim(SecondScreenOwner.Home);
         _secondClaim?.Activate();
-        if (!_resumeSubscribed)
+        if (!_eventsSubscribed)
         {
             App.Resumed += OnAppResumed;
-            _resumeSubscribed = true;
+            _viewModel.LinkReported += OnLinkReported;
+            _eventsSubscribed = true;
         }
         _zone = 0;
         ClearCardFocus();
@@ -286,9 +296,9 @@ public sealed class HomePage : ContentPage, IPadHandler
                     "Now then... let's find your games!");
 
                 var choice = await PadMenu.ShowAsync(_hostGrid, "Get started", null,
-                    new PadOption("Link an emulator", IconPath: "link"),
-                    new PadOption("Open a single save file", IconPath: "file"),
-                    new PadOption($"Download the sprite pack ({SpritePackDownloader.SizeHint})", IconPath: "download"),
+                    new PadOption("Link an emulator", IconPath: "link", Detail: "Pick the emulator folder where your games keep their saves."),
+                    new PadOption("Open a single save file", IconPath: "file", Detail: "Pick one save file instead of a whole emulator folder."),
+                    new PadOption($"Download the sprite pack ({SpritePackDownloader.SizeHint})", IconPath: "download", Detail: "Animated sprites, HOME pictures and item icons, to use offline."),
                     new PadOption("Maybe later", IconPath: "close"));
                 switch (choice)
                 {
@@ -314,13 +324,17 @@ public sealed class HomePage : ContentPage, IPadHandler
         base.OnDisappearing();
         _isAppearing = false;
         _secondClaim?.Release();
-        if (_resumeSubscribed)
+        if (_eventsSubscribed)
         {
             App.Resumed -= OnAppResumed;
-            _resumeSubscribed = false;
+            _viewModel.LinkReported -= OnLinkReported;
+            _eventsSubscribed = false;
         }
         IPlatformApplication.Current?.Services.GetService<GamepadRouter>()?.Remove(this);
     }
+
+    private void OnLinkReported(string title, string message) =>
+        MainThread.BeginInvokeOnMainThread(() => _ = PadMenu.ShowAsync(_hostGrid, title, message, "OK"));
 
     /// <summary>Android settings do not trigger MAUI page appearing again; resume does.</summary>
     private void OnAppResumed()
@@ -408,7 +422,7 @@ public sealed class HomePage : ContentPage, IPadHandler
     {
         var choice = await PadMenu.ShowAsync(_hostGrid, "Filter games", null,
             new PadOption("All games", IconPath: "all"),
-            new PadOption("Release order", IconPath: "calendar"),
+            new PadOption("Release order", IconPath: "calendar", Detail: "Every game, from the oldest release to the newest."),
             new PadOption("Alphabetical (A-Z)", IconPath: "alpha"),
             new PadOption("Game Boy (Gen I-II)", IconPath: "platform-gb"),
             new PadOption("GBA (Gen III)", IconPath: "platform-gba"),
@@ -579,22 +593,28 @@ public sealed class HomePage : ContentPage, IPadHandler
         var hiddenOption = $"Show hidden saves ({hiddenCount})";
         var options = new List<PadOption>
         {
-            new("Link an emulator", IconPath: "link"),
-            new("Manage linked storage", IconPath: "sdcard"),
-            new("Open a save file", IconPath: "file"),
+            new("Link an emulator", IconPath: "link", Detail: "Pick the emulator folder where your games keep their saves."),
+            new("Manage linked storage", IconPath: "sdcard", Detail: "Unlink emulator folders. Your files stay on the device."),
+            new("Open a save file", IconPath: "file", Detail: "Pick one save file instead of a whole emulator folder."),
         };
-        if (hiddenCount > 0) options.Add(new PadOption(hiddenOption, IconPath: "show"));
+        if (hiddenCount > 0) options.Add(new PadOption(hiddenOption, IconPath: "show", Detail: "Saves you hid from Home. Pick one to show it again."));
+        var scheme = $"Color scheme: {PKForge.Chrome.ColorTheme.Current.Name}";
+        var background = $"Box background: {BoxBackground.Name(BoxBackground.Style)}";
         options.AddRange(
         [
-            new PadOption("Restore points", IconPath: "history"),
+            new PadOption(scheme, IconPath: "palette", Detail: "The app's colors: the default blues or a theme for each type."),
+            new PadOption(background, IconPath: "box", Detail: "How each PC box shows the wallpaper the game gives it."),
+            new PadOption("Restore points", IconPath: "history", Detail: "The backups made before each write, to put a save back as it was."),
             new PadOption("About PKForge", IconPath: "info"),
             new PadOption("Check for update", IconPath: "update"),
-            new PadOption("Music", IconPath: "music"),
-            new PadOption("Misc", IconPath: "gears"),
+            new PadOption("Music", IconPath: "music", Detail: "Play your own audio files in the background."),
+            new PadOption("Misc", IconPath: "gears", Detail: "Sprite pack, rescan, logs, screen and editing modes."),
             new PadOption("Quit PKForge", IconPath: "quit"),
         ]);
         var choice = await PadMenu.ShowAsync(_hostGrid, "Settings", null, [.. options]);
         if (choice == hiddenOption) { await ShowHiddenSavesAsync(); return; }
+        if (choice == scheme) { await ShowColorSchemeAsync(); return; }
+        if (choice == background) { await ShowBoxBackgroundAsync(); return; }
         switch (choice)
         {
             case "Link an emulator": await ShowLinkMenuAsync(); break;
@@ -649,7 +669,7 @@ public sealed class HomePage : ContentPage, IPadHandler
 
         var options = roots
             .Select(root => new PadOption($"Unlink {SaveDescriptions.EmulatorName(root.Kind)} · {root.DisplayName}", IconPath: IconFor(root.Kind)))
-            .Append(new PadOption("Unlink all storage units", IconPath: "unlink"))
+            .Append(new PadOption("Unlink all storage units", IconPath: "unlink", Detail: "Removes every linked folder. Your files stay on the device."))
             .Append(new PadOption("Cancel", IconPath: "close"))
             .ToArray();
         var choice = await PadMenu.ShowAsync(_hostGrid, "Linked storage", "Remove a linked emulator folder without resetting the app.", options);
@@ -766,6 +786,15 @@ public sealed class HomePage : ContentPage, IPadHandler
         {
             case AppUpdateInstallResult.InstallerOpened:
                 _viewModel.Status = "Android is installing the update.";
+#if ANDROID
+                // Android answers later, through the install receiver; a refusal is shown here.
+                void OnFailed(string reason)
+                {
+                    UpdateInstallReceiver.Failed -= OnFailed;
+                    _ = ReportInstallFailureAsync(update, reason);
+                }
+                UpdateInstallReceiver.Failed += OnFailed;
+#endif
                 break;
             case AppUpdateInstallResult.ReleasePageOpened:
                 _viewModel.Status = "The PKForge release page is open.";
@@ -779,6 +808,15 @@ public sealed class HomePage : ContentPage, IPadHandler
                     AppUpdateService.OpenInstallPermissionSettings();
                 break;
         }
+    }
+
+    private async Task ReportInstallFailureAsync(AvailableAppUpdate update, string reason)
+    {
+        _viewModel.Status = $"Update failed: {reason}";
+        var openRelease = await PadMenu.ConfirmAsync(_hostGrid, "Open the release page?",
+            $"Android did not install the update ({reason}). The GitHub release page has the same APK.", "Open");
+        if (openRelease)
+            await Launcher.OpenAsync(update.ReleaseUrl);
     }
 
     /// <summary>Background music: library, play/pause, skip, order, autostart.</summary>
@@ -800,10 +838,11 @@ public sealed class HomePage : ContentPage, IPadHandler
             var choice = await PadMenu.ShowAsync(_hostGrid, "Background music", playing,
                 new PadOption(music.IsPlaying ? "Pause" : "Play", IconPath: music.IsPlaying ? "pause" : "play"),
                 new PadOption("Skip to next track", IconPath: "skip"),
-                new PadOption($"Add music files ({music.Library.Count})", IconPath: "folder"),
-                new PadOption(music.Library.Count > 0 ? "Clear library" : "-", IconPath: "delete"),
-                new PadOption($"Order: {order}", IconPath: "shuffle"),
-                new PadOption($"Autostart: {auto}", IconPath: "settings"));
+                new PadOption($"Add music files ({music.Library.Count})", IconPath: "folder", Detail: "Pick audio files on your device to add to the library."),
+                new PadOption(music.Library.Count > 0 ? "Clear library" : "-", IconPath: "delete",
+                    Detail: music.Library.Count > 0 ? "Empties the list. Your audio files stay on the device." : null),
+                new PadOption($"Order: {order}", IconPath: "shuffle", Detail: "Play the library in order or shuffled."),
+                new PadOption($"Autostart: {auto}", IconPath: "settings", Detail: "ON starts the music when PKForge opens."));
             switch (choice)
             {
                 case "Play": music.Play(); break;
@@ -836,6 +875,34 @@ public sealed class HomePage : ContentPage, IPadHandler
         }
     }
 
+    /// <summary>How each PC box shows its game wallpaper.</summary>
+    private async Task ShowBoxBackgroundAsync()
+    {
+        var styles = Enum.GetValues<PKForge.Chrome.StoragePaint.WallpaperStyle>();
+        var picked = await PadMenu.ShowAsync(_hostGrid, "Box background", null,
+            [
+                new PadOption(BoxBackground.Name(PKForge.Chrome.StoragePaint.WallpaperStyle.Blue), Detail: "The game's wallpaper pattern in the color scheme's tones."),
+                new PadOption(BoxBackground.Name(PKForge.Chrome.StoragePaint.WallpaperStyle.Veiled), Detail: "The game's wallpaper under a veil of the color scheme."),
+                new PadOption(BoxBackground.Name(PKForge.Chrome.StoragePaint.WallpaperStyle.Duotone), Detail: "The wallpaper's pattern in two tones, the color scheme's to its own."),
+                new PadOption(BoxBackground.Name(PKForge.Chrome.StoragePaint.WallpaperStyle.Horizon), Detail: "The wallpaper rises from the bottom and fades into the color scheme."),
+            ]);
+        foreach (var style in styles.Where(style => BoxBackground.Name(style) == picked))
+        {
+            BoxBackground.Set(style);
+            _viewModel.Status = $"Box background: {BoxBackground.Name(style)}.";
+        }
+    }
+
+    /// <summary>The color scheme picker; a new scheme rebuilds Home and the lower screen in its colors.</summary>
+    private async Task ShowColorSchemeAsync()
+    {
+        var theme = await ThemePicker.ShowAsync(_hostGrid);
+        if (theme is null || theme.Id == PKForge.Chrome.ColorTheme.Current.Id) return;
+        ColorThemeSetting.Set(theme);
+        AppLog.Info("theme", $"Player picked the {theme.Id} color scheme");
+        if (Application.Current is App app) await app.ReloadForThemeAsync();
+    }
+
     /// <summary>Maintenance actions: the sprite pack, the rescan, and the scan report.</summary>
     private async Task ShowMiscAsync()
     {
@@ -843,15 +910,18 @@ public sealed class HomePage : ContentPage, IPadHandler
         var choice = await PadMenu.ShowAsync(_hostGrid, "Misc", null,
             new PadOption(trainerProfiles.UseCurrentTrainerForGeneration
                 ? "Generated Pokémon obey trainer: ON"
-                : "Generated Pokémon obey trainer: OFF", IconPath: "profile"),
-            new PadOption($"Download full sprite pack ({SpritePackDownloader.SizeHint})", IconPath: "download"),
-            new PadOption("Rescan games", IconPath: "refresh"),
-            new PadOption("Scan report", IconPath: "report"),
+                : "Generated Pokémon obey trainer: OFF", IconPath: "profile",
+                Detail: "ON makes Pokémon you create belong to the open save's trainer."),
+            new PadOption($"Download full sprite pack ({SpritePackDownloader.SizeHint})", IconPath: "download", Detail: "Animated sprites, HOME pictures and item icons, to use offline."),
+            new PadOption("Rescan games", IconPath: "refresh", Detail: "Look through your linked folders for saves again."),
+            new PadOption("Scan report", IconPath: "report", Detail: "What the last scan found in each folder, to copy and send us."),
             new PadOption("Share logs", IconPath: "export", Detail: "Crash reports and recent activity, to send us when something goes wrong."),
             new PadOption(SecondScreenMode.UserOff ? "Second screen: OFF" : "Second screen: ON", IconPath: "compact",
                 Detail: "OFF keeps PKForge on one screen, so the other stays free (an emulator, say)."),
-            new PadOption(Services.HaXMode.IsOn ? "HaX mode: ON" : "HaX mode: OFF", IconPath: "hax"),
-            new PadOption(Services.HardcoreMode.IsOn ? "Hardcore mode: ON" : "Hardcore mode: OFF", IconPath: "hardcore"));
+            new PadOption(Services.HaXMode.IsOn ? "HaX mode: ON" : "HaX mode: OFF", IconPath: "hax",
+                Detail: "ON lets pickers offer any option, even illegal ones."),
+            new PadOption(Services.HardcoreMode.IsOn ? "Hardcore mode: ON" : "Hardcore mode: OFF", IconPath: "hardcore",
+                Detail: "ON blocks edits, new Pokémon and copies. Moving Pokémon still works."));
         switch (choice)
         {
             case var ownership when ownership?.StartsWith("Generated Pokémon obey trainer:", StringComparison.Ordinal) == true:
@@ -952,7 +1022,7 @@ public sealed class HomePage : ContentPage, IPadHandler
         }
     }
 
-    private bool _crashOffered;
+    private static bool _crashOffered;
 
     /// <summary>After a crash, offers the report once on the next launch.</summary>
     private async Task OfferCrashReportAsync()
@@ -1195,28 +1265,20 @@ public sealed class HomePage : ContentPage, IPadHandler
                 _viewModel.Groups[i].IsSelected = i == _shelfIndex;
         }
 
-        // Long-press (held ~0.5 s) opens the identity menu; the tap that follows the
-        // release is swallowed so the save does not also open. MAUI's pointer
-        // recognizer never sees touch once a tap recognizer owns the view on Android,
-        // so the hold is timed from the native touch stream it shares with the tap.
-        var longPressFired = false;
-        AttachLongPress(card, () =>
-        {
-            if (card.BindingContext is not SaveCard group) return;
-            longPressFired = true;
-            Select(group);
-            _ = ShowSaveMenuAsync(group);
-        });
-
-        var tap = new TapGestureRecognizer();
-        tap.Tapped += async (_, _) =>
-        {
-            if (longPressFired) { longPressFired = false; return; }
-            if (card.BindingContext is not SaveCard group) return;
-            Select(group);
-            await OpenCardAsync(group);
-        };
-        card.GestureRecognizers.Add(tap);
+        // A tap opens the save; a long press (held ~0.5 s) opens its identity menu instead.
+        AttachPress(card,
+            () =>
+            {
+                if (card.BindingContext is not SaveCard group) return;
+                Select(group);
+                _ = OpenCardAsync(group);
+            },
+            () =>
+            {
+                if (card.BindingContext is not SaveCard group) return;
+                Select(group);
+                _ = ShowSaveMenuAsync(group);
+            });
         BlockNativeFocus(card);
         return card;
     }
@@ -1238,8 +1300,9 @@ public sealed class HomePage : ContentPage, IPadHandler
     private async Task ShowEventsMenuAsync()
     {
         var choice = await PadMenu.ShowAsync(_hostGrid, "Event database", null,
-            new PadOption($"Community boxes ({Services.CommunityBoxService.RepoTitle})", IconPath: "community"),
-            new PadOption("Wonder cards", IconPath: "events"));
+            new PadOption($"Community boxes ({Services.CommunityBoxService.RepoTitle})", IconPath: "community",
+                Detail: "Event Pokémon collections shared online, to put in your Bank."),
+            new PadOption("Wonder cards", IconPath: "events", Detail: "Found inside each game: open a game, press Y, then Wonder cards."));
         switch (choice)
         {
             case var boxes when boxes?.StartsWith("Community boxes", StringComparison.Ordinal) == true:

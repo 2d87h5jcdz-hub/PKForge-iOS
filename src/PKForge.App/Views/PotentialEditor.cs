@@ -26,15 +26,20 @@ public static class PotentialEditor
 
             var options = new List<PadOption>();
             if (p.SupportsTera)
-                options.Add(new PadOption($"Tera type · {p.TeraTypeName}{(p.TeraLocked ? " (fixed)" : "")}"));
+                options.Add(new PadOption($"Tera type · {p.TeraTypeName}{(p.TeraLocked ? " (fixed)" : "")}",
+                    Detail: "The type it turns into when it Terastallizes."));
             if (p.SupportsHyperTrain)
-                options.Add(new PadOption($"Hyper Training · {p.HyperTrained.Count(t => t)}/6"));
+                options.Add(new PadOption($"Hyper Training · {p.HyperTrained.Count(t => t)}/6",
+                    Detail: "Bottle Cap training: a stat acts as if its IV were perfect."));
             if (p.SupportsAwakening)
-                options.Add(new PadOption($"Awakening Values · {p.Awakening.Sum()}/1200"));
+                options.Add(new PadOption($"Awakening Values · {p.Awakening.Sum()}/1200",
+                    Detail: "Let's Go stat boosts from candies, up to 200 per stat."));
             if (p.SupportsGanbaru)
-                options.Add(new PadOption($"Grit Effort Levels · {p.Ganbaru.Sum()}/{p.GanbaruMaximums.Sum()}"));
+                options.Add(new PadOption($"Grit Effort Levels · {p.Ganbaru.Sum()}/{p.GanbaruMaximums.Sum()}",
+                    Detail: "Legends: Arceus stat boosts from Grit items."));
             if (p.SupportsAbilitySlot)
-                options.Add(new PadOption($"Ability slot · {p.AbilitySlots[p.AbilitySlot].Name}"));
+                options.Add(new PadOption($"Ability slot · {p.AbilitySlots[p.AbilitySlot].Name}",
+                    Detail: "Which of its abilities it has, as a Capsule or Patch would set."));
 
             if (options.Count == 0)
             {

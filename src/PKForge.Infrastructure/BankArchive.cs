@@ -93,7 +93,7 @@ public static class BankArchive
             known.Add(Sha256Hex(bank.GetData(entry.Id)));
         }
 
-        var imported = 0;
+        var deposits = new List<BankDeposit>();
         var skipped = 0;
         var rejected = 0;
         for (var i = 0; i < candidates.Length; i++)
@@ -111,11 +111,12 @@ public static class BankArchive
                 skipped++;
                 continue;
             }
-            bank.Add(bytes, info);
-            imported++;
+            deposits.Add(new BankDeposit(bytes, info));
         }
         progress?.Invoke(candidates.Length, candidates.Length);
-        return new BankArchiveImportResult(imported, skipped, rejected);
+        // One bank write once every file is read: a failure or a cancel leaves the bank untouched.
+        bank.AddMany(deposits);
+        return new BankArchiveImportResult(deposits.Count, skipped, rejected);
     }
 
     /// <summary>File name for one entry: "025 - Sparky a1b2c3d4.pk7". The short id keeps
@@ -131,14 +132,16 @@ public static class BankArchive
     }
 
     /// <summary>True for .pk, .pk1 through .pk9 and the PKHeX side formats the bank records
-    /// (.pb7, .pb8, .pa8, .pa9, .sk2, .ck3, .xk3, .bk4, .rk4), case-insensitive — the cheap
-    /// prefilter that keeps an import scan from parsing a folder of arbitrary files.</summary>
+    /// (.pb7, .pb8, .pa8, .pa9, .sk2, .ck3, .xk3, .bk4, .rk4) and the CFRU hacks' own records
+    /// (.pk3rr, .pk3ub, .pk3gsc), case-insensitive — the cheap prefilter that keeps an import
+    /// scan from parsing a folder of arbitrary files.</summary>
     public static bool IsPkFileName(string fileName)
     {
         var extension = Path.GetExtension(fileName).ToLowerInvariant();
         return extension is ".pk" or ".pk1" or ".pk2" or ".pk3" or ".pk4"
             or ".pk5" or ".pk6" or ".pk7" or ".pk8" or ".pk9"
-            or ".pb7" or ".pb8" or ".pa8" or ".pa9" or ".sk2" or ".ck3" or ".xk3" or ".bk4" or ".rk4";
+            or ".pb7" or ".pb8" or ".pa8" or ".pa9" or ".sk2" or ".ck3" or ".xk3" or ".bk4" or ".rk4"
+            or ".pk3rr" or ".pk3ub" or ".pk3gsc";
     }
 
     /// <summary>Strips filesystem-hostile characters (SAF display names reject them too) and caps length.</summary>

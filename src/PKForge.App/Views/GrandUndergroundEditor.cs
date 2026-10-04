@@ -20,8 +20,8 @@ public static class GrandUndergroundEditor
             }
 
             var options = items.Select(item => new PadOption($"{item.Name} · {item.Count}/{item.MaxCount} · {item.Type}"))
-                .Append(new PadOption("Fill every stack", IconPath: "fill"))
-                .Append(new PadOption("Clear every stack", IconPath: "clear"))
+                .Append(new PadOption("Fill every stack", IconPath: "fill", Detail: "Every item goes to its maximum; a restore point is made first."))
+                .Append(new PadOption("Clear every stack", IconPath: "clear", Detail: "Every item goes to 0; a restore point is made first."))
                 .ToArray();
             var choice = await EditorMenu.ShowAsync(host, "Grand underground", "Spheres, treasures, statues, and pedestals", options);
             if (choice is null) return;

@@ -41,7 +41,7 @@ public sealed class DialogueChoiceBox : IPadHandler
         {
             FontFamily = DsChrome.PixelFont,
             FontSize = 16,
-            TextColor = Colors.White,
+            TextColor = UiTokens.Bright,
             LineBreakMode = LineBreakMode.WordWrap,
             VerticalOptions = LayoutOptions.Start,
         };

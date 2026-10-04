@@ -24,6 +24,7 @@ public static class PksmIconCatalog
         new("trainer", "gi_trainer.png", "Trainer card and records of the save's trainer"),
         new("events", "icon_events.png", "Wonder cards / Mystery Gift events"),
         new("settings", "icon_settings.png", "Settings"),
+        new("palette", "px_palette.png", "Color scheme"),
         new("folder", "icon_folder.png", "Pick a folder / files on device"),
         new("park", "px_park.png", "Poképark"),
         // Pokémon actions

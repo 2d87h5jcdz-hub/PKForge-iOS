@@ -29,13 +29,13 @@ public static class EntralinkEditor
                 Environment.NewLine + "Pokémon met in the Entree Forest are Dream World catches; only PKHeX's legal Dream World list is used here.";
             var blocked = PKForge.App.Services.HardcoreMode.Blocks(SaveAction.EditWorld, out var status);
 
-            var options = new List<PadOption> { new(Areas, IconPath: "tree") };
+            var options = new List<PadOption> { new(Areas, IconPath: "tree", Detail: "See which Pokémon wait in each forest area.") };
             if (!blocked)
             {
-                options.Add(new PadOption(Fill, IconPath: "fill", Accent: UiTokens.Green));
+                options.Add(new PadOption(Fill, IconPath: "fill", Accent: UiTokens.Green, Detail: "Every slot gets a random Dream World Pokémon; all areas open."));
                 options.Add(new PadOption(UnlockAreas, IconPath: "all"));
                 options.Add(new PadOption(Clear, IconPath: "clear"));
-                options.Add(new PadOption(Levels, IconPath: "level"));
+                options.Add(new PadOption(Levels, IconPath: "level", Detail: "White Forest and Black City levels, 0 to 999."));
             }
             if (state.IsB2W2)
             {

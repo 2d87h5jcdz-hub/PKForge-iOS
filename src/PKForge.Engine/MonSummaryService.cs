@@ -50,10 +50,11 @@ public sealed class MonSummaryService(IGameDataService data, IMonInfoService inf
 
         var legal = (bool?)null;
         IReadOnlyList<string> lines = [];
+        IReadOnlyList<LegalityCheck>? checks = null;
         if (analyzeLegality && session.SupportsLegalityAnalysis)
         {
             var report = Try(() => legality.Analyze(session, box, slot));
-            if (report is not null) (legal, lines) = (report.Valid, report.Lines);
+            if (report is not null) (legal, lines, checks) = (report.Valid, report.Lines, report.Checks);
         }
 
         return new MonSummary(
@@ -80,7 +81,8 @@ public sealed class MonSummaryService(IGameDataService data, IMonInfoService inf
             owned.Count(r => !r.IsMark), owned.Count(r => r.IsMark), owned.Select(r => r.Name).ToList(),
             legal, lines,
             Try(() => MonFieldService.Describe(session, box, slot)),
-            SummaryTraits(session, box, slot, d, entity))
+            SummaryTraits(session, box, slot, d, entity),
+            checks)
         {
             // The MOVES page marks each move legal / not legal with the engine's reason.
             MoveVerdicts = legal is null || entity is null ? null : Try(() => LegalityAssistService.GetMoveLegality(entity)),

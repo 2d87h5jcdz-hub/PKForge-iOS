@@ -74,7 +74,8 @@ public sealed class PadMenu : IPadHandler
         }
 
         var content = new VerticalStackLayout { Spacing = 10 };
-        content.Children.Add(Kit.HeaderBar(title));
+        // The title as a section chip, the same as the editor's and the summary's sections.
+        content.Children.Add(EditorRows.EditorSection(title));
         if (!string.IsNullOrEmpty(message))
         {
             content.Children.Add(new Label

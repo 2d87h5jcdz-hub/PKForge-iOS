@@ -265,8 +265,15 @@ public sealed record BatchDryRun(int Targeted, int Affected, int BecomeIllegal, 
 /// </summary>
 public interface IMonInfoService
 {
-    /// <summary>Every move of the open game with its in-game type/PP and how this mon (or <paramref name="species"/>) learns it.</summary>
+    /// <summary>
+    /// Every move of the open game with its in-game type/PP and how this mon (or <paramref name="species"/>) learns it.
+    /// With <paramref name="box"/> <see cref="NoSlot"/> there is no Pokémon yet (one being created): the moves
+    /// <paramref name="species"/> learns in this game by level up, machine, tutor or egg.
+    /// </summary>
     IReadOnlyList<MoveChoice> GetMoveChoices(ISaveEngineSession session, int box, int slot, int? species = null, int? form = null);
+
+    /// <summary>The box value meaning "no Pokémon yet" for <see cref="GetMoveChoices"/>.</summary>
+    public const int NoSlot = int.MinValue;
 
     /// <summary>One move's in-game type, category and PP with its reference numbers (no learn data); null for unknown ids.</summary>
     MoveChoice? GetMove(ISaveEngineSession session, int move);

@@ -148,16 +148,24 @@ public sealed class AppUpdateService
         context.StartActivity(intent);
     }
 
-    private static void StartAndroidInstall(string apkPath)
+    /// <summary>
+    /// Installs the downloaded APK through a package-installer session. Same-package,
+    /// same-signature updates may install silently once the user has granted PKForge the
+    /// install-unknown-apps switch, but Xiaomi's HyperOS/MIUI refuse a silent install from an
+    /// installer they have not allowlisted ("INSTALL_FAILED_ABORTED: Permission denied"), so
+    /// there, and on a retry after any failed silent attempt, Android shows its own prompt.
+    /// </summary>
+    internal static void StartAndroidInstall(string apkPath, bool askUser = false)
     {
         var context = Platform.CurrentActivity ?? Platform.AppContext;
         var installer = context.PackageManager!.PackageInstaller!;
         var parameters = new Android.Content.PM.PackageInstaller.SessionParams(Android.Content.PM.PackageInstallMode.FullInstall);
         parameters.SetAppPackageName(context.PackageName!);
-        // Same-package, same-signature updates may install silently once the user has
-        // granted PKForge the Android install-unknown-apps switch.
+        askUser |= IsXiaomi();
         if (Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.S)
-            parameters.SetRequireUserAction((int)Android.Content.PM.PackageInstallUserAction.NotRequired);
+            parameters.SetRequireUserAction((int)(askUser
+                ? Android.Content.PM.PackageInstallUserAction.Required
+                : Android.Content.PM.PackageInstallUserAction.NotRequired));
         Android.Util.Log.Info("PKForgeUpdate", $"Creating install session for {context.PackageName}, APK {apkPath}");
         var sessionId = installer.CreateSession(parameters);
         using var session = installer.OpenSession(sessionId);
@@ -169,10 +177,16 @@ public sealed class AppUpdateService
         }
 
         var callback = new Android.Content.Intent(context, Java.Lang.Class.FromType(typeof(UpdateInstallReceiver)))
-            .SetAction(UpdateInstallReceiver.ActionName);
+            .SetAction(UpdateInstallReceiver.ActionName)!
+            .PutExtra(UpdateInstallReceiver.ExtraApkPath, apkPath)!
+            .PutExtra(UpdateInstallReceiver.ExtraAskedUser, askUser);
+        // Mutable on purpose: Android adds the install status (and the prompt to show) to this
+        // intent, and an immutable PendingIntent drops those extras, so every result would read
+        // as a plain failure. The intent names its receiver, which Android 14 requires of a
+        // mutable PendingIntent. Before Android 12, PendingIntents were mutable by default.
         var flags = Android.App.PendingIntentFlags.UpdateCurrent;
-        if (Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.M)
-            flags |= Android.App.PendingIntentFlags.Immutable;
+        if (Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.S)
+            flags |= Android.App.PendingIntentFlags.Mutable;
         var pending = Android.App.PendingIntent.GetBroadcast(
             context,
             UpdateInstallReceiver.RequestCode,
@@ -180,8 +194,14 @@ public sealed class AppUpdateService
             flags);
         var sender = pending?.IntentSender ?? throw new InvalidOperationException("Android did not create the update callback.");
         session.Commit(sender);
-        Android.Util.Log.Info("PKForgeUpdate", $"Committed install session {sessionId}");
+        Android.Util.Log.Info("PKForgeUpdate", $"Committed install session {sessionId} (prompt: {askUser})");
     }
+
+    private static bool IsXiaomi() =>
+        Android.OS.Build.Manufacturer is { } maker
+        && (maker.Equals("Xiaomi", StringComparison.OrdinalIgnoreCase)
+            || maker.Equals("POCO", StringComparison.OrdinalIgnoreCase)
+            || maker.Equals("Redmi", StringComparison.OrdinalIgnoreCase));
 #pragma warning restore CA1416
 #endif
 }
@@ -191,7 +211,13 @@ public sealed class AppUpdateService
 public sealed class UpdateInstallReceiver : Android.Content.BroadcastReceiver
 {
     public const string ActionName = "org.pkforge.app.UPDATE_INSTALL_RESULT";
+    public const string ExtraApkPath = "org.pkforge.app.UPDATE_APK";
+    public const string ExtraAskedUser = "org.pkforge.app.UPDATE_ASKED_USER";
     public const int RequestCode = 4701;
+
+    /// <summary>Raised on the main thread when Android refused the update even with its own
+    /// prompt, with Android's reason; the Home screen says so instead of staying silent.</summary>
+    public static event Action<string>? Failed;
 
     public override void OnReceive(Android.Content.Context? context, Android.Content.Intent? intent)
     {
@@ -214,12 +240,37 @@ public sealed class UpdateInstallReceiver : Android.Content.BroadcastReceiver
         }
         if (userAction is not null && context is not null)
         {
+            // A receiver has no activity task of its own: without NewTask, StartActivity throws.
+            userAction.AddFlags(Android.Content.ActivityFlags.NewTask);
             context.StartActivity(userAction);
             return;
         }
         Android.Util.Log.Info("PKForgeUpdate", status == (int)Android.Content.PM.PackageInstallStatus.Success
             ? "Update install confirmed."
             : $"Update install status {status}: {message}");
+        if (status == (int)Android.Content.PM.PackageInstallStatus.Success) return;
+
+        var apk = intent?.GetStringExtra(ExtraApkPath);
+        var askedUser = intent?.GetBooleanExtra(ExtraAskedUser, false) ?? false;
+        // The user turning Android's prompt down is their answer, not a failure to report.
+        if (askedUser && status == (int)Android.Content.PM.PackageInstallStatus.FailureAborted) return;
+        if (string.IsNullOrWhiteSpace(message)) message = null;
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            try
+            {
+                if (!askedUser && apk is not null && File.Exists(apk))
+                {
+                    AppUpdateService.StartAndroidInstall(apk, askUser: true);
+                    return;
+                }
+            }
+            catch (Exception error) when (error is Java.Lang.Exception or IOException or InvalidOperationException)
+            {
+                message = error.Message;
+            }
+            Failed?.Invoke(message ?? $"Android stopped the installation (status {status}).");
+        });
     }
 }
 #endif

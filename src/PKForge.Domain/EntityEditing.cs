@@ -3,6 +3,9 @@ namespace PKForge.Domain;
 /// <summary>An engine-owned mutable save document. All access goes through this session; callers never see engine types.</summary>
 public interface ISaveEngineSession : IDisposable
 {
+    /// <summary>Called when this save becomes the one the player has open (legality era).</summary>
+    void MakeActive() { }
+
     SaveSnapshot Snapshot { get; }
     EntityDetail ReadEntity(int box, int slot);
     void ApplyEdit(int box, int slot, EntityEdit edit);
@@ -74,6 +77,11 @@ public interface ISaveEngineSession : IDisposable
 
     /// <summary>Sets one dex cell (seen/caught).</summary>
     void SetDexEntry(int species, bool seen, bool caught);
+
+    /// <summary>Whether the game has a dex cell for this species. Newer games cut most of
+    /// the National Dex (no Alakazam in Scarlet/Violet); setting such a
+    /// species writes nothing.</summary>
+    bool IsDexSpecies(int species);
 
     /// <summary>
     /// Rule-aware Nuzlocke view built from met data: first catch per route plus
@@ -191,6 +199,10 @@ public interface ISaveEngineSession : IDisposable
     bool SupportsLegalFashionUnlock { get; }
     /// <summary>Unlocks only clothing the current game/version can legitimately own.</summary>
     void UnlockAllLegalFashion();
+    /// <summary>Whether this save has the X/Y Style value (Lumiose boutique and restaurant access).</summary>
+    bool SupportsStylePoints { get; }
+    int GetStylePoints();
+    void SetStylePoints(int value);
 
     // ── Mystery Gift inbox ──
     /// <summary>Cards and received-gift records stored by the save. This surface is read-only.</summary>
@@ -738,5 +750,14 @@ public sealed record EntityEdit(
     int? Gender = null,
     int? Friendship = null);
 
-/// <summary>Human-readable legality result for one slot.</summary>
-public sealed record LegalityReport(bool Valid, IReadOnlyList<string> Lines);
+/// <summary>Human-readable legality result for one slot, with its checks grouped by topic.</summary>
+public sealed record LegalityReport(bool Valid, IReadOnlyList<string> Lines, IReadOnlyList<LegalityCheck>? Checks = null);
+
+/// <summary>How a legality check came out, worst last.</summary>
+public enum LegalityJudgement { Valid, Fishy, Invalid }
+
+/// <summary>
+/// One topic of the legality analysis (Encounter, PID / IVs, Moves...): its worst outcome and
+/// the reasons behind anything that is not valid.
+/// </summary>
+public sealed record LegalityCheck(string Name, LegalityJudgement Judgement, IReadOnlyList<string> Reasons);

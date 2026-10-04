@@ -60,6 +60,11 @@ internal class CfruEngineSession : ISaveEngineSession
         _displayName = displayName;
     }
 
+    /// <summary>A session over a blank image no detector would take for a real save: the
+    /// host of one Bank record (<see cref="CfruEntity.Host"/>).</summary>
+    internal static CfruEngineSession Blank(CfruGameProfile profile, byte[] image, string? displayName) =>
+        new(image, displayName, profile with { Detect = _ => true });
+
     private ICfruGameData Game => _profile.Data;
 
     /// <summary>Boxes 0-18 in the stream, 19-21 in the raw region, then the profile's
@@ -330,11 +335,14 @@ internal class CfruEngineSession : ISaveEngineSession
         }
     }
 
+    /// <summary>Where the party tail keeps each stat, in app order: Spe sits before SpA and SpD.</summary>
+    private static readonly int[] PartyStatOffsets = [0x58, 0x5A, 0x5C, 0x60, 0x62, 0x5E];
+
     private void RecomputePartyStats(RadicalRedMon mon)
     {
         var stats = Game.ComputeStats(mon);
         for (var i = 0; i < 6; i++)
-            BinaryPrimitives.WriteUInt16LittleEndian(mon.Buffer.AsSpan(mon.Offset + 0x58 + i * 2), (ushort)stats[i]);
+            BinaryPrimitives.WriteUInt16LittleEndian(mon.Buffer.AsSpan(mon.Offset + PartyStatOffsets[i]), (ushort)stats[i]);
         var current = Math.Min(mon.CurrentHp, stats[0]);
         BinaryPrimitives.WriteUInt16LittleEndian(mon.Buffer.AsSpan(mon.Offset + 0x56), (ushort)current);
     }
@@ -442,6 +450,18 @@ internal class CfruEngineSession : ISaveEngineSession
         source.Buffer.AsSpan(source.Offset, source.Size).CopyTo(sourceBytes);
         var sourceView = new RadicalRedMon(sourceBytes, 0, source.Party, Game);
 
+        if (fromBox == -1 && toBox == -1 && (uint)toSlot < (uint)PartyCount)
+        {
+            // Inside the party, onto another Pokémon: the two swap places, as in the games.
+            var from = _data.AsSpan(PartyBase + PartyOffset + fromSlot * PartyMonSize, PartyMonSize);
+            var to = _data.AsSpan(PartyBase + PartyOffset + toSlot * PartyMonSize, PartyMonSize);
+            var held = from.ToArray();
+            to.CopyTo(from);
+            held.CopyTo(to);
+            CommitSection(PartySection);
+            return;
+        }
+
         if (toBox == -1)
         {
             // Moving into the party appends, exactly like the games.
@@ -529,45 +549,40 @@ internal class CfruEngineSession : ISaveEngineSession
         CommitPc(ResolveSlot(box, 0));
     }
 
-    /// <summary>Copies a mon between slots of either format; every field the compact
-    /// form shares is carried across the boundary, and crossing into the party
-    /// rebuilds the computed tail (level, stats, HP).</summary>
+    /// <summary>Copies a mon between slots exactly as the game moves it: the same form
+    /// takes every byte, a box takes the compact record (<see cref="CfruEntity.Compact"/>),
+    /// and the party rebuilds the computed tail like a withdrawal.</summary>
     private void CopyBetween(RadicalRedMon source, RadicalRedMon target)
     {
-        target.Buffer.AsSpan(target.Offset, target.Size).Clear();
-        target.Species = source.Species;
-        target.Pid = source.Pid;
-        target.Otid = source.Otid;
-        target.Nickname = source.Nickname;
-        target.Language = source.Language;
-        target.SanityFlags = source.SanityFlags;
-        target.Markings = source.Markings;
-        target.HeldItem = source.HeldItem;
-        target.Experience = source.Experience;
-        target.PpBonuses = source.PpBonuses;
-        target.Friendship = Math.Max(source.Friendship, 70);
-        target.Ball = source.Ball;
-        target.Moves = source.Moves;
-        target.EVs = source.EVs;
-        target.IVs = source.IVs;
-        target.HiddenAbility = source.HiddenAbility;
-        target.IsEgg = source.IsEgg;
-        target.Pokerus = source.Pokerus;
-        target.MetLocation = source.MetLocation;
-        target.MetInfo = source.MetInfo;
-        WriteOtName(target, source.OriginalTrainerName);
-        if (target.Party)
-        {
-            target.Buffer[target.Offset + 0x54] = (byte)source.Level;
-            RecomputePartyStats(target);
-        }
+        var from = source.Buffer.AsSpan(source.Offset, source.Size);
+        if (source.Party == target.Party)
+            from.CopyTo(target.Buffer.AsSpan(target.Offset, target.Size));
+        else if (!target.Party)
+            CfruEntity.Compact(from).CopyTo(target.Buffer.AsSpan(target.Offset, PcMonSize));
+        else
+            Withdraw(from, target);
+    }
+
+    /// <summary>A compact record into a party slot: every stored field, full PP
+    /// (<see cref="CfruEntity.Expand"/>), level from EXP, stats and full HP.</summary>
+    private void Withdraw(ReadOnlySpan<byte> compact, RadicalRedMon party)
+    {
+        CfruEntity.Expand(compact, party.Buffer.AsSpan(party.Offset, PartyMonSize), Game.MoveBasePp);
+        party.Buffer[party.Offset + 0x54] = (byte)Game.LevelForExperience(party.Species, party.Experience);
+        RecomputePartyStats(party);
+        BinaryPrimitives.WriteUInt16LittleEndian(party.Buffer.AsSpan(party.Offset + 0x56), (ushort)party.PartyStats![0]);
     }
 
     // ── Import / export ──
 
+    /// <summary>The entity format of this game's own Pokémon (PK3RR, PK3GSC).</summary>
+    internal string EntityFormat => _profile.EntityFormat;
+
     public bool ImportSlot(int box, int slot, byte[] fileBytes, string? format = null)
     {
-        var entity = EntityFormat.GetFromBytes(fileBytes);
+        if (EntityBytes.Normalize(format) == _profile.EntityFormat)
+            return ImportOwn(box, slot, fileBytes);
+        var entity = EntityBytes.Parse(fileBytes, format);
         if (entity is null || entity.Species == 0) return false;
         if (entity is not PK3)
         {
@@ -576,13 +591,14 @@ internal class CfruEngineSession : ISaveEngineSession
             entity = converted;
         }
         var pk3 = (PK3)entity;
+        if (Landing(pk3, Game, _profile.GameName, out _) is not { } ids) return false;
 
         if (box == -1)
         {
             if (PartyCount >= 6) return false;
             var party = PartyMon(PartyCount);
             _data.AsSpan(party.Offset, PartyMonSize).Clear();
-            FromPk3(pk3, party);
+            FromPk3(pk3, ids, party);
             BinaryPrimitives.WriteUInt32LittleEndian(_data.AsSpan(PartyBase + PartyCountOffset), (uint)(PartyCount + 1));
             CommitSection(PartySection);
             return true;
@@ -592,32 +608,34 @@ internal class CfruEngineSession : ISaveEngineSession
         if (location is null) return false;
         var target = PcMon(location.Value);
         target.Buffer.AsSpan(target.Offset, PcMonSize).Clear();
-        FromPk3(pk3, target);
+        FromPk3(pk3, ids, target);
         CommitPc(location);
         return true;
     }
 
-    private void FromPk3(PK3 pk3, RadicalRedMon target)
+    /// <summary>The hack ids <paramref name="pk3"/> lands with in this game, or null with the
+    /// reason one of its national ids has no counterpart in <paramref name="game"/>'s tables.</summary>
+    internal static CfruPk3.Inbound? Landing(PK3 pk3, ICfruGameData game, string gameName, out string? refusal) =>
+        CfruPk3.FromPk3(pk3, gameName, game.SpeciesFromNational, game.MoveFromNational, game.ItemFromNational,
+            game.AbilityIds, ball => RadicalRedMon.TryStoreBall(ball, out var stored) ? stored : -1, out refusal);
+
+    private void FromPk3(PK3 pk3, CfruPk3.Inbound ids, RadicalRedMon target)
     {
-        // A real .pk3 carries national ids; the hack's are the CFRU engine's own,
-        // so the species crosses by name and falls back to the raw id for hacks of
-        // hacks that store internal ids directly.
-        var species = ResolveImportSpecies(pk3.Species);
-        target.Species = species;
+        target.Species = ids.Species;
         target.Pid = pk3.PID;
         target.Otid = pk3.ID32;
-        target.Nickname = pk3.Nickname.Length > 0 ? pk3.Nickname : Game.SpeciesName(species);
+        target.Nickname = pk3.Nickname.Length > 0 ? pk3.Nickname : Game.SpeciesName(ids.Species);
         target.Language = Math.Clamp(pk3.Language, 1, 5);
         target.SanityFlags = 2; // hasSpecies
-        target.HeldItem = pk3.HeldItem;
+        target.HeldItem = ids.HeldItem;
         target.Experience = Math.Max(pk3.EXP, 1u);
-        target.Moves = [pk3.Move1, pk3.Move2, pk3.Move3, pk3.Move4];
+        target.Moves = ids.Moves;
         Span<int> ivs = stackalloc int[6]; // PKHeX order: HP, Atk, Def, Spe, SpA, SpD
         pk3.GetIVs(ivs);
         target.IVs = [ivs[0], ivs[1], ivs[2], ivs[4], ivs[5], ivs[3]]; // -> app order HP, Atk, Def, SpA, SpD, Spe
         target.EVs = [pk3.EV_HP, pk3.EV_ATK, pk3.EV_DEF, pk3.EV_SPA, pk3.EV_SPD, pk3.EV_SPE];
-        target.Ball = 3; // Gen 3 mons store no ball
-        target.HiddenAbility = false;
+        target.Ball = ids.Ball;
+        target.HiddenAbility = ids.HiddenAbility;
         target.IsEgg = pk3.IsEgg;
         target.Friendship = 70;
         target.MetLocation = pk3.MetLocation;
@@ -629,11 +647,27 @@ internal class CfruEngineSession : ISaveEngineSession
         }
     }
 
-    private int ResolveImportSpecies(int stored)
+    /// <summary>Lands this game's own export (<see cref="CfruEntity"/>) as it is: a box
+    /// takes the compact record verbatim, the party rebuilds its tail like a withdrawal.</summary>
+    private bool ImportOwn(int box, int slot, byte[] compact)
     {
-        var species = GameInfo.GetStrings("en").specieslist;
-        var byName = stored > 0 && stored < species.Length ? Game.SpeciesIdByName(species[stored]) : 0;
-        return byName > 0 ? byName : Math.Min(stored, Game.MaxSpeciesId);
+        if (compact.Length != PcMonSize) return false;
+        if (!new RadicalRedMon(compact.ToArray(), 0, false, Game).LooksValid) return false;
+
+        if (box == -1)
+        {
+            if (PartyCount >= 6) return false;
+            Withdraw(compact, PartyMon(PartyCount));
+            BinaryPrimitives.WriteUInt32LittleEndian(_data.AsSpan(PartyBase + PartyCountOffset), (uint)(PartyCount + 1));
+            CommitSection(PartySection);
+            return true;
+        }
+
+        var location = ResolveSlot(box, slot);
+        if (location is null) return false;
+        compact.CopyTo(BufferOf(location.Value).AsSpan(location.Value.Offset, PcMonSize));
+        CommitPc(location);
+        return true;
     }
 
     public SlotExport ExportSlot(int box, int slot)
@@ -642,33 +676,50 @@ internal class CfruEngineSession : ISaveEngineSession
         if (mon is null || !mon.LooksValid)
             throw new InvalidOperationException("That slot is empty.");
 
-        // The .pk3 keeps the hack's internal species id (clamped to the table) so a
-        // round trip through PKForge is lossless; stock tools read national ids only.
-        var pk3 = new PK3
-        {
-            Species = (ushort)Math.Min(mon.Species, Game.MaxSpeciesId),
-            PID = mon.Pid,
-            ID32 = mon.Otid,
-            Nickname = mon.Nickname,
-            IsNicknamed = true,
-            HeldItem = (ushort)mon.HeldItem,
-            EXP = mon.Experience,
-            Move1 = (ushort)mon.Moves[0],
-            Move2 = (ushort)mon.Moves[1],
-            Move3 = (ushort)mon.Moves[2],
-            Move4 = (ushort)mon.Moves[3],
-            OriginalTrainerName = mon.OriginalTrainerName,
-            Language = (int)LanguageID.English,
-            Version = GameVersion.FR,
-        };
+        // The compact record the game boxes, so the Bank holds every byte the game does.
+        var bytes = mon.Party
+            ? CfruEntity.Compact(mon.Buffer.AsSpan(mon.Offset, PartyMonSize))
+            : mon.Buffer.AsSpan(mon.Offset, PcMonSize).ToArray();
+        return new SlotExport(bytes, $"{Game.SpeciesName(mon.Species)}.{_profile.EntityFormat.ToLowerInvariant()}", _profile.EntityFormat);
+    }
+
+    /// <summary>The Bank's facts for an exported mon, read through its own game's tables.</summary>
+    internal static BankEntryInfo Describe(RadicalRedMon mon, string format, string sourceName)
+    {
+        var (national, form, traits) = LookOf(mon);
+        return new BankEntryInfo(national, form, mon.IsShiny, mon.Nickname, mon.Level, 3, sourceName, format,
+            HeldItemId(mon), traits);
+    }
+
+    /// <summary>
+    /// The PK3 another game imports: every id bridged to its national twin through the hack's
+    /// tables, none of the CFRU-only fields (only the export's own game reads the exact
+    /// record). Null with the reason when an id has no Generation 3 counterpart.
+    /// </summary>
+    internal static PK3? ToPk3(RadicalRedMon mon, out string? refusal, List<string>? adjustments = null)
+    {
+        var data = mon.Data;
+        var national = data.NationalIdOf(mon.Species);
+        var moves = mon.Moves;
+        var pk3 = CfruPk3.ToPk3(new CfruPk3.Outbound(
+            data.SpeciesName(mon.Species), national, data.SpeciesFromNational(national) == mon.Species, mon.Pid,
+            [.. moves.Select(move => (move, data.MoveToNational(move), data.MoveName(move)))],
+            mon.HeldItem, data.ItemToNational(mon.HeldItem), data.ItemName(mon.HeldItem),
+            mon.HiddenAbility, data.ActiveAbility(mon), mon.DisplayBall), out refusal, adjustments);
+        if (pk3 is null) return null;
+        pk3.ID32 = mon.Otid;
+        pk3.Nickname = mon.Nickname;
+        pk3.IsNicknamed = true;
+        pk3.EXP = mon.Experience;
+        pk3.OriginalTrainerName = mon.OriginalTrainerName;
+        pk3.Language = (int)LanguageID.English;
+        pk3.Version = GameVersion.FR;
         var ivs = mon.IVs;
         pk3.SetIVs([ivs[0], ivs[1], ivs[2], ivs[5], ivs[3], ivs[4]]); // storage -> PKHeX order
         pk3.SetEVs([mon.EVs[0], mon.EVs[1], mon.EVs[2], mon.EVs[5], mon.EVs[4], mon.EVs[3]]);
         // The egg flag stays cleared: PKHeX's PK3.IsEgg setter rewrites nickname and language.
         pk3.RefreshChecksum();
-        var bytes = new byte[pk3.SIZE_PARTY];
-        pk3.WriteDecryptedDataParty(bytes);
-        return new SlotExport(bytes, $"{Game.SpeciesName(mon.Species)}.pk3");
+        return pk3;
     }
 
     // ── Generation ──
@@ -726,6 +777,9 @@ internal class CfruEngineSession : ISaveEngineSession
         mon.IVs = [31, 31, 31, 31, 31, 31];
         mon.Ball = ball is { } wanted && RadicalRedMon.TryStoreBall(wanted, out var cfru) ? cfru : 3;
         WriteOtName(mon, trainer.Name.Length > 0 ? trainer.Name : "PKForge");
+        // A caught Pokémon carries its species name as its nickname, padded with terminators.
+        mon.Buffer.AsSpan(mon.Offset + 8, 10).Fill(0xFF);
+        mon.Nickname = Game.SpeciesName(species);
 
         if (nature is { } wantedNature)
             RerollPid(mon, nature: wantedNature);
@@ -805,6 +859,8 @@ internal class CfruEngineSession : ISaveEngineSession
         CommitSection(PartySection);
     }
 
+    public bool IsDexSpecies(int nationalSpecies) => Game.DexNumberOf(nationalSpecies) is >= 1 and <= DexCapacity;
+
     public DexProgress GetDexProgress() => new(CountDexBits(DexSeenOffset), CountDexBits(DexCaughtOffset), DexCapacity);
 
     private bool IsDexBitSet(int baseOffset, int dexNumber)
@@ -833,15 +889,15 @@ internal class CfruEngineSession : ISaveEngineSession
 
     /// <summary>The grid's held-item flag: the bridged national id, or -1 when the ROM item has
     /// no national twin (it still "holds something").</summary>
-    private int HeldItemId(RadicalRedMon mon) =>
-        mon.HeldItem == 0 ? 0 : Game.ItemToNational(mon.HeldItem) is > 0 and var national ? national : -1;
+    private static int HeldItemId(RadicalRedMon mon) =>
+        mon.HeldItem == 0 ? 0 : mon.Data.ItemToNational(mon.HeldItem) is > 0 and var national ? national : -1;
 
     /// <summary>Species, form and sprite traits of a mon, the form recovered from the hack's species name.</summary>
-    private (int National, int Form, SpriteTraits Traits) LookOf(RadicalRedMon mon)
+    private static (int National, int Form, SpriteTraits Traits) LookOf(RadicalRedMon mon)
     {
-        var national = Game.NationalIdOf(mon.Species);
-        var (form, traits) = RomhackForms.Resolve(national, Game.SpeciesName(mon.Species));
-        return (national, form, traits with { Female = Game.GenderOf(mon.Pid, mon.Species) == 1 });
+        var national = mon.Data.NationalIdOf(mon.Species);
+        var (form, traits) = RomhackForms.Resolve(national, mon.Data.SpeciesName(mon.Species));
+        return (national, form, traits with { Female = mon.Data.GenderOf(mon.Pid, mon.Species) == 1 });
     }
 
     private SlotSummary SlotOf(int box, int slot, RadicalRedMon mon)
@@ -1103,6 +1159,9 @@ internal class CfruEngineSession : ISaveEngineSession
     public DaycareWithdrawal WithdrawDaycareToFirstEmptyBox(int facility, int slot) => throw NotYet("The Day Care");
     public bool SupportsLegalFashionUnlock => false;
     public void UnlockAllLegalFashion() { }
+    public bool SupportsStylePoints => false;
+    public int GetStylePoints() => 0;
+    public void SetStylePoints(int value) { }
     public MysteryGiftInbox GetMysteryGiftInbox() => new(false, []);
     public TrainerRecordsInfo GetTrainerRecords() => new(false, []);
     public TrainerStats GetTrainerStats() => new(false, 0, 0, 0, false, 0, 0, false, 0, 0);

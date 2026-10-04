@@ -305,8 +305,8 @@ public static class EventGallery
     private static SKFont Font(float size) => new(PixelFont.Face, size) { Edging = SKFontEdging.Antialias };
 
     /// <summary>The card-album world's card colours: plum wonder-card paper over the navy chrome.</summary>
-    private static readonly SKColor CardTop = PksmPaint.Mix(Pksm.GiftPinkLight, Pksm.Paper, 0.45f);
-    private static readonly SKColor CardBottom = PksmPaint.Mix(Pksm.GiftPink, Pksm.PaperShade, 0.35f);
+    private static SKColor CardTop => PksmPaint.Mix(Pksm.GiftPinkLight, Pksm.Paper, 0.45f);
+    private static SKColor CardBottom => PksmPaint.Mix(Pksm.GiftPink, Pksm.PaperShade, 0.35f);
     private static readonly SKColor CardRim = PksmPaint.Lighter(Pksm.GiftPinkLight, 0.12f);
     private static readonly SKColor GroupInk = PksmPaint.Lighter(Pksm.GiftRed, 0.25f);
 
@@ -463,6 +463,9 @@ public static class EventGallery
             _list = new SKCanvasView { EnableTouchEvents = true };
             _list.PaintSurface += PaintList;
             _list.Touch += OnListTouch;
+            // Drag, flick with momentum, and a thumb you can grab: the album is long.
+            _scroller = new TouchScroller(_list.Dispatcher, () => _scroll, offset => { _scroll = offset; _list.InvalidateSurface(); },
+                () => Math.Max(0, _contentH - _viewH), () => _viewH, () => _track, slop: 8, grabWidth: 28);
 
             _preview = new SKCanvasView { EnableTouchEvents = true };
             _preview.PaintSurface += PaintPreview;
@@ -774,16 +777,17 @@ public static class EventGallery
                 PaintRow(c, new SKRect(left, y, right, y + RowH), line.Item, title, small, tagFont, ink, soft, stripe);
             }
 
-            // Scrollbar: a slim cobalt thumb showing where in the album we are.
-            if (_contentH > _viewH)
+            // Scrollbar: a thumb showing where in the album we are, and a handle to drag through it.
+            _track = new SKRect(panel.Right - 10, panel.Top + 6, panel.Right - 4, panel.Bottom - 6);
+            if (_contentH > _viewH && _scroller.Visibility is var shown and > 0)
             {
-                var track = new SKRect(panel.Right - 7, panel.Top + 6, panel.Right - 4, panel.Bottom - 6);
-                var thumbH = Math.Max(18, track.Height * _viewH / _contentH);
-                var thumbY = track.Top + (track.Height - thumbH) * (_scroll / Math.Max(1, _contentH - _viewH));
-                using var trackPaint = new SKPaint { Color = Pksm.LogoVoid.WithAlpha(0x90), IsAntialias = true };
-                using var thumb = new SKPaint { Color = Pksm.LogoCyan.WithAlpha(0xC0), IsAntialias = true };
-                c.DrawRoundRect(track, 1.5f, 1.5f, trackPaint);
-                c.DrawRoundRect(new SKRect(track.Left, thumbY, track.Right, thumbY + thumbH), 1.5f, 1.5f, thumb);
+                var held = _scroller.HoldingThumb;
+                var thumbRect = _scroller.Thumb();
+                if (held) thumbRect = new SKRect(thumbRect.Left - 4, thumbRect.Top, thumbRect.Right, thumbRect.Bottom);
+                using var trackPaint = new SKPaint { Color = Pksm.LogoVoid.WithAlpha((byte)(0x90 * shown)), IsAntialias = true };
+                using var thumb = new SKPaint { Color = Pksm.LogoCyan.WithAlpha((byte)((held ? 0xFF : 0xC0) * shown)), IsAntialias = true };
+                c.DrawRoundRect(_track, 3, 3, trackPaint);
+                c.DrawRoundRect(thumbRect, 3, 3, thumb);
             }
             c.Restore();
         }
@@ -818,45 +822,28 @@ public static class EventGallery
             Text(c, Fit(small, line2, status - textLeft - (e.Received ? 22 : e.Compatible ? 4 : 70)), textLeft, r.Top + 37, SKTextAlign.Left, small, soft);
         }
 
-        private float _touchStartY, _scrollStart;
-        private bool _dragging;
+        private TouchScroller _scroller = null!;
+        private SKRect _track;
 
         private void OnListTouch(object? sender, SKTouchEventArgs args)
         {
             args.Handled = true;
-            var y = args.Location.Y / Density;
-            switch (args.ActionType)
+            var point = new SKPoint(args.Location.X / Density, args.Location.Y / Density);
+            if (args.ActionType == SKTouchAction.WheelChanged)
             {
-                case SKTouchAction.Pressed:
-                    _touchStartY = y;
-                    _scrollStart = _scroll;
-                    _dragging = false;
-                    return;
-                case SKTouchAction.Moved:
-                    if (!_dragging && Math.Abs(y - _touchStartY) > 8) _dragging = true;
-                    if (_dragging)
-                    {
-                        _scroll = _scrollStart - (y - _touchStartY);
-                        ClampScroll();
-                        _list.InvalidateSurface();
-                    }
-                    return;
-                case SKTouchAction.Released:
-                    if (_dragging) { _dragging = false; return; }
-                    var contentY = y + _scroll;
-                    foreach (var line in _lines)
-                    {
-                        if (line.Item < 0 || contentY < line.Y || contentY > line.Y + line.H) continue;
-                        if (line.Item == _index) OpenCard();
-                        else Select(line.Item);
-                        return;
-                    }
-                    return;
-                case SKTouchAction.WheelChanged:
-                    _scroll -= args.WheelDelta / Density;
-                    ClampScroll();
-                    _list.InvalidateSurface();
-                    return;
+                _scroll -= args.WheelDelta / Density;
+                ClampScroll();
+                _list.InvalidateSurface();
+                return;
+            }
+            if (_scroller.Handle(args.ActionType, point) is not { } tap) return;
+            var contentY = tap.Y + _scroll;
+            foreach (var line in _lines)
+            {
+                if (line.Item < 0 || contentY < line.Y || contentY > line.Y + line.H) continue;
+                if (line.Item == _index) OpenCard();
+                else Select(line.Item);
+                return;
             }
         }
 
@@ -988,20 +975,20 @@ public static class EventGallery
                     var q = _query;
                     var options = new List<PadOption>();
                     if (_ctx.Profile is not null)
-                        options.Add(new PadOption(Check(q.CompatibleOnly) + "Fits this save", IconPath: "game"));
+                        options.Add(new PadOption(Check(q.CompatibleOnly) + "Fits this save", IconPath: "game", Detail: "Only cards for this save's generation and language."));
                     options.Add(new PadOption($"Gifts: {q.Kind switch { WonderCardKindFilter.Pokemon => "Pokémon", WonderCardKindFilter.Items => "Items", _ => "All" }}", IconPath: "events"));
-                    options.Add(new PadOption(Check(q.ShinyOnly) + "Shiny only", IconPath: "shiny"));
-                    options.Add(new PadOption($"Status: {q.Received switch { WonderCardReceivedFilter.NotReceived => "New only", WonderCardReceivedFilter.Received => "Received", _ => "Any" }}", IconPath: "check"));
+                    options.Add(new PadOption(Check(q.ShinyOnly) + "Shiny only", IconPath: "shiny", Detail: "Only cards that give a shiny Pokémon."));
+                    options.Add(new PadOption($"Status: {q.Received switch { WonderCardReceivedFilter.NotReceived => "New only", WonderCardReceivedFilter.Received => "Received", _ => "Any" }}", IconPath: "check", Detail: "Show cards you already received here, or only new ones."));
                     options.Add(new PadOption($"Pokémon: {(q.Species is { } sp ? SpeciesName(_ctx.Data, sp) : "Any")}", IconPath: "pokedex"));
                     options.Add(new PadOption($"Year: {q.Year?.ToString() ?? "Any"}", IconPath: "calendar"));
                     options.Add(new PadOption($"Language: {q.Language ?? "Any"}", IconPath: "info"));
-                    options.Add(new PadOption($"Event: {(q.Series is { Length: > 14 } lengthy ? lengthy[..13] + "…" : q.Series ?? "Any")}", IconPath: "ribbons"));
-                    options.Add(new PadOption(Check(q.OnePerEvent) + "One card per event", IconPath: "compact"));
+                    options.Add(new PadOption($"Event: {(q.Series is { Length: > 14 } lengthy ? lengthy[..13] + "…" : q.Series ?? "Any")}", IconPath: "ribbons", Detail: "Only cards from one event series."));
+                    options.Add(new PadOption(Check(q.OnePerEvent) + "One card per event", IconPath: "compact", Detail: "Show one card for each event instead of one per language."));
                     options.Add(new PadOption($"Sort: {SortLabel(q.Sort)}", IconPath: "sort"));
                     options.Add(new PadOption($"Group: {GroupLabel(q.Grouping)}", IconPath: "blocks"));
                     if (q.ActiveFilterCount > 0 || q.Search.Length > 0)
-                        options.Add(new PadOption("Clear all filters", IconPath: "clear"));
-                    options.Add(new PadOption($"Clear marks ({_ctx.History.Count})", IconPath: "delete"));
+                        options.Add(new PadOption("Clear all filters", IconPath: "clear", Detail: "Turn off every filter and clear the search."));
+                    options.Add(new PadOption($"Clear marks ({_ctx.History.Count})", IconPath: "delete", Detail: "Remove every received mark, for all your saves."));
 
                     var choice = await PadMenu.ShowAsync(_ctx.Host, "Filter cards",
                         $"{_page.Items.Count} of {_page.Total} cards shown. Filters never block receiving.", options.ToArray());
@@ -1553,7 +1540,8 @@ public static class EventGallery
             try
             {
                 choice = await PadMenu.ShowAsync(_ctx.Host, "Export", "Share the wonder card itself, or the Pokémon it gives as a .pk file.",
-                    new PadOption("Card file", IconPath: "events"), new PadOption("Pokémon (.pk)", IconPath: "export"));
+                    new PadOption("Card file", IconPath: "events", Detail: "The wonder card as a file."),
+                    new PadOption("Pokémon (.pk)", IconPath: "export", Detail: "The Pokémon the card gives, as a .pk file."));
             }
             finally
             {

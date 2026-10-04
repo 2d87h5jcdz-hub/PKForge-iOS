@@ -82,8 +82,10 @@ public sealed record SaveDescription(string GameName, int Generation, string Tra
 
 public interface IBackupService
 {
-    /// <summary>The change description shown in the restore point list (what this point undoes).</summary>
-    ValueTask<BackupReceipt> CreateAsync(SaveSnapshot source, string? changeDescription = null, CancellationToken cancellationToken = default);
+    /// <summary>The change description shown in the restore point list (what this point undoes);
+    /// <paramref name="documentId"/> is the save file the point belongs to.</summary>
+    ValueTask<BackupReceipt> CreateAsync(SaveSnapshot source, string? changeDescription = null, string? documentId = null,
+        CancellationToken cancellationToken = default);
     ValueTask<IReadOnlyList<BackupInfo>> ListAsync(CancellationToken cancellationToken = default);
     ValueTask<ReadOnlyMemory<byte>> ReadAsync(string backupId, CancellationToken cancellationToken = default);
 }
@@ -198,6 +200,12 @@ public interface IBankService
     IReadOnlyList<BankEntry> GetAll();
     int BoxCount { get; }
     BankEntry Add(byte[] data, BankEntryInfo info);
+    /// <summary>
+    /// Deposits a whole batch in one index write, all or nothing: every placement is checked
+    /// before anything is written, and a failure anywhere (bytes or index) leaves the bank
+    /// exactly as it was. Deposits without a slot take the first free ones in order.
+    /// </summary>
+    IReadOnlyList<BankEntry> AddMany(IReadOnlyList<BankDeposit> deposits);
     byte[] GetData(Guid id);
     void Move(Guid id, int box, int slot);
     void Remove(Guid id);
@@ -233,6 +241,10 @@ public interface IBankService
     /// </summary>
     int Place(IReadOnlyList<(Guid Id, int Box, int Slot)> placements);
 }
+
+/// <summary>One Pokémon for <see cref="IBankService.AddMany"/>; <paramref name="Box"/> and
+/// <paramref name="Slot"/> name an empty slot to land in, or are -1 for the first free one.</summary>
+public sealed record BankDeposit(byte[] Data, BankEntryInfo Info, int Box = -1, int Slot = -1);
 
 /// <summary>Descriptive facts captured at deposit time (display without parsing bytes).</summary>
 /// <param name="Format">
@@ -290,7 +302,18 @@ public sealed record BackupInfo(
     string Format,
     int Generation,
     long SizeBytes,
-    string? ChangeDescription = null);
+    string? ChangeDescription = null,
+    string? DocumentId = null)
+{
+    /// <summary>
+    /// Whether this restore point belongs to the save file <paramref name="documentId"/>.
+    /// Points made before they recorded their file match by format, generation and name.
+    /// </summary>
+    public bool BelongsTo(string documentId, SaveSnapshot open) => DocumentId is { } own
+        ? string.Equals(own, documentId, StringComparison.Ordinal)
+        : string.Equals(Format, open.Format, StringComparison.Ordinal) && Generation == open.Generation
+            && string.Equals(DisplayName, open.DisplayName, StringComparison.Ordinal);
+}
 
 public sealed record PickedDocument(string DocumentId, string DisplayName);
 

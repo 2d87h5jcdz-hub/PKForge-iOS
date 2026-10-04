@@ -87,7 +87,9 @@ public static class CollectionCenter
 
     private static CommunityBoxService? Service;
 
-    /// <summary>Downloads every entity in the folder and deposits them into fresh Bank boxes.</summary>
+    /// <summary>Downloads every entity in the folder and deposits them into fresh Bank boxes,
+    /// all or none: nothing reaches the Bank until every file has arrived and reads as a
+    /// Pokémon, and then the whole folder lands in one Bank write.</summary>
     private static async Task<bool> DepositBoxAsync(Grid host, CommunityBoxService service,
         IBankService bank, ISaveEngine engine, string boxName, IReadOnlyList<CommunityNode> files)
     {
@@ -103,54 +105,43 @@ public static class CollectionCenter
         if (!confirmed) return false;
 
         var overlay = LoadingOverlay.Show(host, "Depositing…",
-            $"Downloading {boxName} into your Bank. Cancelling keeps what already arrived.");
-        var deposited = 0;
-        var skipped = 0;
+            $"Downloading {boxName} into your Bank. Cancelling deposits nothing.");
+        var deposits = new List<BankDeposit>(files.Count);
+        var deposited = false;
+        string summary;
         try
         {
-            var box = bank.BoxCount;
-            bank.AddBox();
-            var slot = 0;
+            var firstBox = bank.BoxCount;
             for (var i = 0; i < files.Count; i++)
             {
                 overlay.Cancellation.Token.ThrowIfCancellationRequested();
                 overlay.Report(i, files.Count);
-                byte[] data;
-                try
-                {
-                    data = await service.DownloadAsync(files[i], overlay.Cancellation.Token);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch { skipped++; continue; }
-
-                var info = engine.TryDescribeEntity(data, boxName, files[i].Name); // the extension names the format
-                if (info is null) { skipped++; continue; }
-
-                if (slot == FileBankService.SlotsPerBox)
-                {
-                    box = bank.BoxCount;
-                    bank.AddBox();
-                    slot = 0;
-                }
-                var entry = bank.Add(data, info);
-                bank.Move(entry.Id, box, slot++);
-                deposited++;
+                var data = await service.DownloadAsync(files[i], overlay.Cancellation.Token);
+                var info = engine.TryDescribeEntity(data, boxName, files[i].Name) // the extension names the format
+                    ?? throw new InvalidDataException($"{files[i].Name} is not a readable Pokémon.");
+                // Fresh boxes after the last one, filled in folder order.
+                deposits.Add(new BankDeposit(data, info, firstBox + i / FileBankService.SlotsPerBox, i % FileBankService.SlotsPerBox));
             }
             overlay.Report(files.Count, files.Count);
+            bank.AddMany(deposits);
+            deposited = true;
+            summary = $"{deposits.Count} Pokémon arrived in the Bank.";
         }
         catch (OperationCanceledException)
         {
-            // Partial deposits stay: the Bank never loses what it was handed.
+            summary = "Cancelled. Nothing was deposited.";
+        }
+        catch (Exception error)
+        {
+            AppLog.Error("community", $"Deposit of {boxName} failed", error);
+            summary = $"Nothing was deposited: {error.Message}";
         }
         finally
         {
             overlay.Close();
         }
 
-        var summary = deposited == 0
-            ? "Nothing could be deposited - no file in that folder was a readable Pokémon."
-            : $"{deposited} Pokémon arrived in the Bank{(skipped > 0 ? $" ({skipped} could not be read and were skipped)" : "")}.";
         await PadMenu.ShowAsync(host, "Collection center", summary, "OK");
-        return deposited > 0;
+        return deposited;
     }
 }

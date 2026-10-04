@@ -37,12 +37,15 @@ public partial class BackupHistoryViewModel : ObservableObject
     private async Task LoadAsync()
     {
         Backups.Clear();
+        // With a save open, only its own restore points are listed: restoring writes into it.
+        var open = _sessions.Current;
         foreach (var info in await _backups.ListAsync())
-            Backups.Add(info);
+            if (open is null || info.BelongsTo(open.Document.DocumentId, open.Snapshot))
+                Backups.Add(info);
         Status = Backups.Count == 0
             ? "No backups yet. One is created automatically before every write."
             : CanRestore
-                ? $"{Backups.Count} backup(s). Restoring writes into the currently open save file."
+                ? $"{Backups.Count} backup(s) of this save. Restoring writes into it."
                 : $"{Backups.Count} backup(s). Open a save to enable restore.";
     }
 
@@ -75,6 +78,12 @@ public partial class BackupHistoryViewModel : ObservableObject
         if (session is null)
         {
             Status = "Open a save first - restore writes into the open save file.";
+            return;
+        }
+
+        if (!backup.BelongsTo(session.Document.DocumentId, session.Snapshot))
+        {
+            Status = "This restore point belongs to another save, so it was not restored here.";
             return;
         }
 

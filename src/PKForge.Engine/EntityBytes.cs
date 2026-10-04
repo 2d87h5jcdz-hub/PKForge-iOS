@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using PKForge.Domain;
+using PKForge.Engine.RadicalRed;
 using PKHeX.Core;
 
 namespace PKForge.Engine;
@@ -43,6 +44,9 @@ public static partial class EntityBytes
         nameof(PK1), nameof(PK2), nameof(SK2),
     };
 
+    /// <summary>CFRU hack formats (<see cref="CfruEntity"/>): the game's own compact record, no PKHeX type.</summary>
+    private static readonly HashSet<string> Native = new(CfruEntity.Formats, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The format name recorded for <paramref name="pk"/> ("PB8", "PK6", ...).</summary>
     public static string FormatOf(PKM pk) => pk.GetType().Name;
 
@@ -54,16 +58,33 @@ public static partial class EntityBytes
     {
         if (string.IsNullOrWhiteSpace(format)) return null;
         var name = format.Trim();
-        if (!Direct.ContainsKey(name) && !ByContent.Contains(name))
+        if (!Direct.ContainsKey(name) && !ByContent.Contains(name) && !Native.Contains(name))
             name = Path.GetExtension(name).TrimStart('.');
         if (Direct.ContainsKey(name)) return Direct.Keys.First(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
         if (ByContent.Contains(name)) return ByContent.First(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
-        return null;
+        return Native.TryGetValue(name, out var native) ? native : null;
     }
 
     /// <summary>The context a format belongs to (None when unknown or context-free).</summary>
     public static EntityContext ContextOf(string? format) =>
         Normalize(format) is { } name && Direct.TryGetValue(name, out var known) ? known.Context : EntityContext.None;
+
+    /// <summary>The ROM hack whose own record <paramref name="format"/> names ("Radical Red"),
+    /// or null for a PKHeX format. Only that game can edit or take back such a record exactly.</summary>
+    public static string? RomHackGame(string? format) =>
+        CfruEntity.Recognize(format) is { } cfru ? CfruEntity.GameName(cfru) : null;
+
+    /// <summary>
+    /// Egg flag, gender, ball and held item of stored bytes, for sorting and filtering: a ROM
+    /// hack's record is read through its own tables (its PK3 view has none of these right),
+    /// anything else through <see cref="Parse(BankEntry, byte[])"/>. Null when unreadable.
+    /// </summary>
+    public static (bool IsEgg, int Gender, int Ball, int HeldItem)? StoredFacts(BankEntry entry, byte[] bytes)
+    {
+        if (CfruEntity.Recognize(entry.Info.Format) is { } cfru)
+            return CfruEntity.Facts(bytes, cfru);
+        return Parse(entry, bytes) is { } pk ? (pk.IsEgg, pk.Gender, pk.Ball, pk.HeldItem) : null;
+    }
 
     /// <summary>Parses a bank entry's bytes as the format recorded at deposit.</summary>
     public static PKM? Parse(BankEntry entry, byte[] bytes) => Parse(bytes, entry.Info.Format);
@@ -78,6 +99,8 @@ public static partial class EntityBytes
     {
         ArgumentNullException.ThrowIfNull(bytes);
         var name = Normalize(format);
+        if (name is not null && Native.Contains(name))
+            return CfruEntity.ToPk3(bytes, name); // another game's view; the hack itself imports the bytes as they are
         var hint = name is not null && Direct.TryGetValue(name, out var direct) ? direct.Context : prefer;
         PKM? detected;
         try { detected = EntityFormat.GetFromBytes(bytes.ToArray(), hint); }

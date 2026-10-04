@@ -31,7 +31,7 @@ namespace PKForge.Engine.GsChronicles;
 internal sealed class GsChroniclesEngineSession : CfruEngineSession
 {
     public static readonly CfruGameProfile Profile = new(
-        "GS Chronicles", "GSCHRONICLES", GsChroniclesData.Instance,
+        "GS Chronicles", "GSCHRONICLES", CfruEntity.GsChronicles, GsChroniclesData.Instance,
         [
             new CfruSectorBox(FirstSection: 1, BlockOffset: 0x1F08), // box 23: SaveBlock1, sections 2-3
             new CfruSectorBox(FirstSection: 1, BlockOffset: 0x1F08 + 30 * RadicalRedFormat.PcMonSize), // box 24: section 3

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using PKForge.App.Services;
 using PKForge.App.Theme;
 using PKForge.Chrome;
@@ -11,47 +10,61 @@ using SkiaSharp.Views.Maui.Controls;
 namespace PKForge.App.Views;
 
 /// <summary>
-/// The read-only Pokémon summary, modelled on the games' own summary screens: a hero
-/// card (render, ball, name, gender, level, types, verdict) beside five pages -
-/// INFO (trainer, nature, ability, item, ball, care), STATS (hexagon plus the
-/// base · IV · EV · value table with the nature's arrows), MOVES (type, category,
-/// numbers, PP, effect), ORIGIN (game, met data, ribbons and marks) and LEGAL (the
-/// full verdict). One component serves the Bank's second-screen inspector, the
-/// full-screen summary and the box browser's Summary entry; it lays itself out as two
-/// columns on wide surfaces and stacks on a phone.
+/// The read-only Pokémon summary in the designer's art direction, laid out like the
+/// 1240×1080 second screen it was drawn for: on the left the name banner, the Pokémon
+/// (Showdown's static front sprite, or the stats hexagon on the Stats page) and the species
+/// card (legality, types, ability, item); on the right five icon tabs over a panel of
+/// sections - INFO (trainer, character, items and care), STATS (the stat table and
+/// potential), MOVES (type, category, numbers, PP, verdict, effect), ORIGIN (met data,
+/// memories, ribbons) and LEGALITY (the verdict and every check by topic). One component
+/// serves the second screen, the Bank's inspector and the full-screen summary; it scales
+/// with its host, one design pixel being <see cref="_unit"/> device-independent units.
 /// <para>
-/// Performance: the view is built once and never rebuilt. Everything but the empty-slot
-/// label is four Skia canvases (sprite, facts, tabs, page) painted with the app's PKSM
-/// chrome, so a new mon or a page turn is a repaint - no view-tree churn, no layout storm.
+/// Performance: the view is built once and never rebuilt. It is three Skia canvases (the
+/// left column, the tabs, the page) and a label, so a new Pokémon or a page turn is a
+/// repaint: no view-tree churn, no layout storm.
 /// </para>
 /// </summary>
 public sealed class MonSummaryView : ContentView
 {
-    private const double WideBreakpoint = 560;
-    private const float FactsHeight = 132;
-    private static readonly string[] StatCaps = ["HP", "Atk", "Def", "SpA", "SpD", "Spe"];
-    private static readonly string[] StatNames = ["HP", "Attack", "Defense", "Sp. Atk", "Sp. Def", "Speed"];
-    private static readonly string[] MarkingGlyphs = ["●", "▲", "■", "♥", "★", "◆"];
+    // The design: a 1240×1080 screen split at 648 design pixels.
+    private const float DesignWidth = 1240, DesignHeight = 1080, LeftWidth = 648, TabsHeight = 118;
+    // The panel's top rim runs through the middle of the tab strip, so the tabs sit across it.
+    private const float PanelTop = 73, ContentTop = 150, PX0 = 20;
+    private const float LabelX = 42, ValueX = 282, LabelColumnRight = 252;
 
-    private static readonly SKColor Raised = new(0xFF, 0x8C, 0x7C);
-    private static readonly SKColor Lowered = new(0x7C, 0xB8, 0xFF);
-    private static readonly SKColor NoteInk = new(0x9C, 0xCC, 0xF4);
+    private static readonly string[] StatCaps = ["HP", "Atk", "Def", "SpA", "SpD", "Spe"];
+    private static readonly string[] MarkingGlyphs = ["●", "▲", "■", "♥", "★", "◆"];
+    // The games' hexagon: HP on top, then clockwise Atk, Def, Spe, SpD, SpA.
+    private static readonly int[] RadarOrder = [0, 1, 2, 5, 4, 3];
+    private static readonly string[] TabIcons = ["tab_info", "tab_stats", "tab_moves", "tab_origin", "tab_legality"];
+
+    private static SKColor PanelFill => ColorTheme.Current.PanelFill;
+    private static SKColor LabelColumn => ColorTheme.Current.LabelColumn;
+    private static SKColor LabelInk => ColorTheme.Current.LabelInk;
+    private static SKColor ValueInk => ColorTheme.Current.ValueInk;
+    private static SKColor SubInk => ColorTheme.Current.SubInk;
+    private static SKColor Cyan => ColorTheme.Current.Rim;
+    private static readonly SKColor Orange = new(0xFF, 0x9A, 0x5A);
+    private static readonly SKColor Gold = new(0xE2, 0xB6, 0x4A);
+    private static readonly SKColor ReasonInk = new(0xAA, 0x96, 0xA0); // legality reasons: muted rose, a signal
+    private static SKColor CardFill => ColorTheme.Current.CardFill;
+    private static SKColor CardRow => ColorTheme.Current.CardRow;
+    private static SKColor CardEdge => ColorTheme.Current.LabelInk;
+    private static SKColor SpeciesFill => ColorTheme.Current.SpeciesFill;
+    private static SKColor SpeciesEdge => ColorTheme.Current.SpeciesEdge;
+    private static SKColor SpeciesInk => ColorTheme.Current.SpeciesInk;
+    private static SKColor NameFrame => ColorTheme.Current.NameFrame;
+    private static readonly SKColor Raised = new(0xFA, 0x8C, 0x96);
+    private static readonly SKColor Lowered = new(0x82, 0xB4, 0xFA);
 
     private readonly ISpriteService _sprites;
     private readonly Grid _layout = new();
-    private readonly Grid _hero = new();
-    // The portrait is two layers: the stage (panel, light, floor, ball) repaints once per mon;
-    // only the small sprite layer on top repaints on GIF ticks.
-    private readonly Grid _portrait = new();
-    private readonly SKCanvasView _stage = new() { InputTransparent = true };
-    private readonly SKCanvasView _sprite = new()
-    {
-        InputTransparent = true, HorizontalOptions = LayoutOptions.Start, VerticalOptions = LayoutOptions.Start,
-    };
-    private readonly SKCanvasView _facts = new() { InputTransparent = true, HeightRequest = FactsHeight };
-    private readonly SKCanvasView _tabs = new() { HeightRequest = 34, EnableTouchEvents = true };
+    private readonly Grid _right = new();
+    private readonly SKCanvasView _left = new() { InputTransparent = true };
+    private readonly SKCanvasView _tabs = new() { EnableTouchEvents = true };
     // The page body scrolls inside its own canvas: one viewport-sized surface painted at
-    // _scrollY and driven by its own touch stream (drag, fling, sideways swipe to turn).
+    // _scrollY (design pixels) and driven by its own touch stream (drag, fling, sideways swipe to turn).
     private readonly SKCanvasView _page = new() { EnableTouchEvents = true };
     private double _scrollY, _contentHeight;
     private readonly Label _empty = new()
@@ -65,44 +78,42 @@ public sealed class MonSummaryView : ContentView
     private bool _legalityPending;
     private string? _caption;
     private SummaryPage _pageKind = SummaryPage.Info;
-    private bool? _wide;
-    private IDispatcherTimer? _timer;
-    private long _elapsedMs;
-    private bool _spriteAnimated;
+    // Device-independent units per design pixel.
+    private float _unit = 0.5f;
 
     /// <summary>Raised when a tab tap or swipe turns the page (hosts keep their own page state in sync).</summary>
     public event Action<SummaryPage>? PageChanged;
 
+    /// <summary>How to repair a Pokémon that is not legal, in the host's own controls.</summary>
+    public string FixHint { get; set; } = "Legalize finds the closest legal version. Its PID, nature or IVs may change.";
+
     public MonSummaryView(ISpriteService sprites)
     {
         _sprites = sprites;
-        _stage.PaintSurface += PaintStage;
-        _sprite.PaintSurface += PaintSprite;
-        _portrait.Children.Add(_stage);
-        _portrait.Children.Add(_sprite);
-        _portrait.SizeChanged += (_, _) => PlaceSprite();
-        _facts.PaintSurface += PaintFacts;
+        _left.PaintSurface += PaintLeft;
         _tabs.PaintSurface += PaintTabs;
         _tabs.Touch += OnTabTouch;
         _page.PaintSurface += PaintPage;
-        // No ScrollView + SwipeGestureRecognizer any more: the recognizer's Android touch
-        // listener consumed the stream, and the InputTransparent canvas inside could not take
-        // it back, so nothing ever scrolled by hand. The canvas reads the finger itself.
         _page.Touch += OnPageTouch;
 
-        _hero.Children.Add(_portrait);
-        _hero.Children.Add(_facts);
-        _layout.Children.Add(_hero);
-        _layout.Children.Add(_tabs);
-        _layout.Children.Add(_page);
-        _layout.Children.Add(_empty);
-        Content = _layout;
-        ApplyLayout(false);
+        _right.RowDefinitions.Add(new RowDefinition(new GridLength(TabsHeight * _unit)));
+        _right.RowDefinitions.Add(new RowDefinition(GridLength.Star));
+        _right.Children.Add(_page);
+        Grid.SetRowSpan(_page, 2);
+        _right.Children.Add(_tabs);
 
-        SizeChanged += (_, _) => { if (Width > 0) ApplyLayout(Width >= WideBreakpoint); };
+        _layout.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(LeftWidth * _unit)));
+        _layout.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+        _layout.Children.Add(_left);
+        _layout.Children.Add(_right);
+        Grid.SetColumn(_right, 1);
+        _layout.Children.Add(_empty);
+        Grid.SetColumnSpan(_empty, 2);
+        Content = _layout;
+
+        SizeChanged += (_, _) => ApplyScale();
         _page.SizeChanged += (_, _) => RefreshPage(resetScroll: false);
-        Loaded += (_, _) => UpdateTimer();
-        Unloaded += (_, _) => StopTimer();
+        Unloaded += (_, _) => StopFling();
         if (!SummaryInk.FaceReady) _ = WarmFontsAsync();
     }
 
@@ -120,20 +131,12 @@ public sealed class MonSummaryView : ContentView
         _legalityPending = legalityPending;
         _caption = caption;
         var has = summary is not null;
-        if (_hero.IsVisible != has) _hero.IsVisible = _tabs.IsVisible = _page.IsVisible = has;
+        if (_left.IsVisible != has) _left.IsVisible = _right.IsVisible = has;
         if (_empty.IsVisible == has) _empty.IsVisible = !has;
         if (!has) _empty.Text = emptyText ?? "Empty slot";
-        _facts.InvalidateSurface();
-        // The same mon with its verdict arriving keeps its sprite frame and scroll: no flicker.
-        if (!sameMon)
-        {
-            _stage.InvalidateSurface();
-            _sprite.InvalidateSurface();
-        }
-        // Only the verdict changed (the slow second half of a load): the hero repaints, the page
-        // only when it is the one showing the verdict.
+        _left.InvalidateSurface();
+        // The same mon with its verdict arriving keeps its scroll: only the verdict page repaints.
         if (!sameMon || _pageKind == SummaryPage.Legality) RefreshPage(resetScroll: !sameMon);
-        UpdateTimer();
         PerfTrace.Log($"summary.show[{_pageKind}]", watch);
         PerfTrace.UntilIdle($"summary.show[{_pageKind}]", Dispatcher);
     }
@@ -154,6 +157,8 @@ public sealed class MonSummaryView : ContentView
         var watch = Stopwatch.StartNew();
         _pageKind = page;
         _tabs.InvalidateSurface();
+        // The Stats page swaps the sprite for the hexagon.
+        _left.InvalidateSurface();
         RefreshPage(resetScroll: true);
         PerfTrace.Log($"summary.page[{page}]", watch);
         PerfTrace.UntilIdle($"summary.page[{page}]", Dispatcher);
@@ -166,9 +171,45 @@ public sealed class MonSummaryView : ContentView
     public void ScrollBy(int direction)
     {
         StopFling();
-        var target = Math.Clamp(_scrollY + direction * Math.Max(60, _page.Height * 0.6), 0, MaxScroll);
+        var viewport = _page.Height / _unit - ContentTop;
+        var target = Math.Clamp(_scrollY + direction * Math.Max(120, viewport * 0.6), 0, MaxScroll);
         this.AbortAnimation(ScrollAnimation);
         new Animation(ScrollTo, _scrollY, target).Commit(this, ScrollAnimation, length: 180, easing: Easing.CubicOut);
+    }
+
+    // ── Layout: one design pixel is _unit dp, the whole design fitted into the host ──
+
+    private void ApplyScale()
+    {
+        if (Width <= 0 || Height <= 0) return;
+        var unit = (float)Math.Min(Width / DesignWidth, Height / DesignHeight);
+        if (Math.Abs(unit - _unit) < 0.0001f) return;
+        _unit = unit;
+        _layout.ColumnDefinitions[0].Width = new GridLength(LeftWidth * unit);
+        _right.RowDefinitions[0].Height = new GridLength(TabsHeight * unit);
+        _left.InvalidateSurface();
+        _tabs.InvalidateSurface();
+        RefreshPage(resetScroll: false);
+    }
+
+    /// <summary>Scales a canvas to design pixels; returns the canvas size in design pixels.</summary>
+    private SKSize BeginDesign(SKCanvas canvas, SKImageInfo info, View view)
+    {
+        canvas.Clear(SKColors.Transparent);
+        var pxPerDp = view.Width > 0 ? (float)(info.Width / view.Width) : (float)Math.Max(1, DeviceDisplay.MainDisplayInfo.Density);
+        var scale = pxPerDp * _unit;
+        canvas.Scale(scale);
+        return new SKSize(info.Width / scale, info.Height / scale);
+    }
+
+    private async Task WarmFontsAsync()
+    {
+        await Task.WhenAll(PixelFont.WarmAsync(), PixelFont.WarmFallbackAsync());
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            _left.InvalidateSurface();
+            RefreshPage(resetScroll: false);
+        });
     }
 
     // ── Touch: drag to scroll, fling, swipe to turn ──────────────────────────
@@ -181,11 +222,11 @@ public sealed class MonSummaryView : ContentView
     private bool _dragging, _swiping;
     private readonly List<(long Ms, float Y)> _touchTrail = new();
     private IDispatcherTimer? _fling;
-    private double _flingVelocity; // dp per ms
+    private double _flingVelocity; // design pixels per ms
 
     private const string ScrollAnimation = "summary-scroll";
 
-    private double MaxScroll => Math.Max(0, _contentHeight - _page.Height);
+    private double MaxScroll => Math.Max(0, _contentHeight - (_page.Height / _unit - ContentTop));
 
     private void OnPageTouch(object? sender, SKTouchEventArgs args)
     {
@@ -216,7 +257,7 @@ public sealed class MonSummaryView : ContentView
                 }
                 if (_dragging)
                 {
-                    ScrollTo(_touchStartScroll - dy);
+                    ScrollTo(_touchStartScroll - dy / _unit);
                     _touchTrail.Add((now, point.Y));
                     if (_touchTrail.Count > 6) _touchTrail.RemoveAt(0);
                 }
@@ -248,8 +289,8 @@ public sealed class MonSummaryView : ContentView
         if (recent.Count < 2) return;
         var span = recent[^1].Ms - recent[0].Ms;
         if (span <= 0) return;
-        _flingVelocity = -(recent[^1].Y - recent[0].Y) / span;
-        if (Math.Abs(_flingVelocity) < 0.1) return;
+        _flingVelocity = -(recent[^1].Y - recent[0].Y) / span / _unit;
+        if (Math.Abs(_flingVelocity) < 0.1 / _unit) return;
         _fling ??= CreateFlingTimer();
         _fling.Start();
     }
@@ -262,7 +303,7 @@ public sealed class MonSummaryView : ContentView
         {
             var target = _scrollY + _flingVelocity * 16;
             _flingVelocity *= FlingFriction;
-            if (target <= 0 || target >= MaxScroll || Math.Abs(_flingVelocity) < 0.02) StopFling();
+            if (target <= 0 || target >= MaxScroll || Math.Abs(_flingVelocity) < 0.02 / _unit) StopFling();
             ScrollTo(target);
         };
         return timer;
@@ -270,97 +311,278 @@ public sealed class MonSummaryView : ContentView
 
     private void StopFling() => _fling?.Stop();
 
-    public static string PageTitle(SummaryPage page) => page switch
-    {
-        SummaryPage.Info => "INFO",
-        SummaryPage.Stats => "STATS",
-        SummaryPage.Moves => "MOVES",
-        SummaryPage.Origin => "ORIGIN",
-        _ => "LEGAL",
-    };
+    // ── Tabs ─────────────────────────────────────────────────────────────────
 
-    private static string TabTitle(SummaryPage page) => page switch
-    {
-        SummaryPage.Info => "Info",
-        SummaryPage.Stats => "Stats",
-        SummaryPage.Moves => "Moves",
-        SummaryPage.Origin => "Origin",
-        _ => "Legal",
-    };
+    private const float TabWidth = 132, TabSlant = 28, TabTop = 28, TabLeft = 12, TabStep = TabWidth - TabSlant;
 
-    private async Task WarmFontsAsync()
+    private static readonly Dictionary<string, SKImage?> Icons = new();
+
+    private static SKImage? Icon(string name)
     {
-        await Task.WhenAll(PixelFont.WarmAsync(), PixelFont.WarmFallbackAsync());
-        MainThread.BeginInvokeOnMainThread(() =>
+        if (Icons.TryGetValue(name, out var image)) return image;
+        try
         {
-            _facts.InvalidateSurface();
-            _tabs.InvalidateSurface();
-            RefreshPage(resetScroll: false);
-        });
-    }
-
-    // ── Layout (set once per orientation; never per mon) ─────────────────────
-
-    private void ApplyLayout(bool wide)
-    {
-        if (_wide == wide) return;
-        _wide = wide;
-        _layout.RowDefinitions.Clear();
-        _layout.ColumnDefinitions.Clear();
-        _layout.RowSpacing = 8;
-        _layout.ColumnSpacing = 12;
-        _hero.RowDefinitions.Clear();
-        _hero.ColumnDefinitions.Clear();
-        _hero.RowSpacing = 8;
-        _hero.ColumnSpacing = 10;
-        if (wide)
-        {
-            // Hero column on the left, tabs + page on the right.
-            _layout.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(2, GridUnitType.Star)));
-            _layout.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(3, GridUnitType.Star)));
-            _layout.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-            _layout.RowDefinitions.Add(new RowDefinition(GridLength.Star));
-            Place(_layout, _hero, 0, 0, rowSpan: 2);
-            Place(_layout, _tabs, 0, 1);
-            Place(_layout, _page, 1, 1);
-            _hero.RowDefinitions.Add(new RowDefinition(GridLength.Star));
-            _hero.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-            _portrait.HeightRequest = -1;
-            _portrait.MinimumHeightRequest = 120;
-            Place(_hero, _portrait, 0, 0);
-            Place(_hero, _facts, 1, 0);
+            using var stream = FileSystem.OpenAppPackageFileAsync($"ui/design/{name}.png").GetAwaiter().GetResult();
+            using var bitmap = SKBitmap.Decode(stream);
+            image = bitmap is null ? null : SKImage.FromBitmap(bitmap);
         }
-        else
-        {
-            _layout.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-            _layout.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-            _layout.RowDefinitions.Add(new RowDefinition(GridLength.Star));
-            Place(_layout, _hero, 0, 0);
-            Place(_layout, _tabs, 1, 0);
-            Place(_layout, _page, 2, 0);
-            _hero.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(FactsHeight)));
-            _hero.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
-            _portrait.HeightRequest = FactsHeight;
-            Place(_hero, _portrait, 0, 0);
-            Place(_hero, _facts, 0, 1);
-        }
-        Place(_layout, _empty, 0, 0, rowSpan: _layout.RowDefinitions.Count, columnSpan: Math.Max(1, _layout.ColumnDefinitions.Count));
+        catch (Exception error) when (error is IOException or FileNotFoundException) { image = null; }
+        Icons[name] = image;
+        return image;
     }
 
-    private static void Place(Grid grid, View view, int row, int column, int rowSpan = 1, int columnSpan = 1)
+    private void PaintTabs(object? sender, SKPaintSurfaceEventArgs args)
     {
-        Grid.SetRow(view, row);
-        Grid.SetColumn(view, column);
-        Grid.SetRowSpan(view, rowSpan);
-        Grid.SetColumnSpan(view, columnSpan);
+        var c = args.Surface.Canvas;
+        BeginDesign(c, args.Info, _tabs);
+        var bottom = TabsHeight;
+        var right = TabLeft + TabStep * 4 + TabWidth;
+        using (var strip = Parallelogram(new SKRect(TabLeft, TabTop, right, bottom), TabSlant))
+        {
+            Fill(c, strip, ColorTheme.Current.TabTop, ColorTheme.Current.TabBottom);
+            Outline(c, strip, Cyan, 4);
+        }
+        using var edge = new SKPaint { Color = Cyan, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 4 };
+        for (var i = 1; i < 5; i++)
+        {
+            var x = TabLeft + i * TabStep;
+            c.DrawLine(x + TabSlant, TabTop, x, bottom, edge);
+        }
+        var active = (int)_pageKind;
+        var ax = TabLeft + active * TabStep;
+        using (var tab = Parallelogram(new SKRect(ax - 6, TabTop - 6, ax + TabWidth + 2, bottom + 2), TabSlant))
+        {
+            Fill(c, tab, ColorTheme.Current.TabActiveTop, ColorTheme.Current.TabActiveBottom);
+            Outline(c, tab, Pksm.Ink, 4);
+        }
+        var sampling = new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None);
+        using var tint = new SKPaint { ColorFilter = SKColorFilter.CreateBlendMode(ColorTheme.Current.TabIcon, SKBlendMode.SrcIn) };
+        for (var i = 0; i < 5; i++)
+        {
+            if (Icon(TabIcons[i]) is not { } icon) continue;
+            var cx = TabLeft + i * TabStep + TabWidth / 2;
+            var cy = (TabTop + bottom) / 2;
+            c.DrawImage(icon, new SKRect(cx - 30, cy - 30, cx + 30, cy + 30), sampling, tint);
+        }
     }
 
-    /// <summary>Measures the page at the scroller's width; only a height change touches layout.</summary>
+    private void OnTabTouch(object? sender, SKTouchEventArgs args)
+    {
+        args.Handled = true;
+        if (args.ActionType != SKTouchAction.Pressed || _tabs.CanvasSize.Width <= 0) return;
+        var designPerPx = (float)(_tabs.Width / _tabs.CanvasSize.Width) / _unit;
+        var x = args.Location.X * designPerPx;
+        var index = Math.Clamp((int)Math.Floor((x - TabLeft) / TabStep), 0, 4);
+        SetPage((SummaryPage)index, raise: true);
+    }
+
+    // ── Left column: name banner, the Pokémon (or the hexagon), species card ──
+
+    private void PaintLeft(object? sender, SKPaintSurfaceEventArgs args)
+    {
+        var c = args.Surface.Canvas;
+        var size = BeginDesign(c, args.Info, _left);
+        if (_summary is not { } s) return;
+
+        // The name banner, run off the left edge like the games' own.
+        using (var frame = new SKPaint { Color = NameFrame, IsAntialias = true })
+            c.DrawRoundRect(new SKRect(-40, 10, 600, 104), 26, 26, frame);
+        using (var banner = Tab(new SKRect(-40, 34, 570, 118), 0, 40))
+        {
+            Fill(c, banner, StoragePaint.BannerTop, StoragePaint.BannerBottom);
+            Outline(c, banner, Pksm.Ink, 4);
+        }
+        // The ball it was caught in sits at the start of the banner, as in the games.
+        var name = s.IsEgg ? "Egg" : s.DisplayName;
+        var hasBall = !s.IsEgg && DrawBall(c, s.Ball, new SKRect(28, 46, 88, 106));
+        var nameLeft = hasBall ? 100f : 0f;
+        SummaryInk.Draw(c, SummaryInk.Fit(name, 44, 540 - nameLeft - 20), (nameLeft + 540) / 2, SummaryInk.Center(77, 44), 44, Pksm.Ink, align: SKTextAlign.Center);
+        if (!string.IsNullOrEmpty(_caption))
+            SummaryInk.Draw(c, SummaryInk.Fit(_caption, 24, 560), 24, SummaryInk.Center(146, 24), 24, SubInk);
+
+        // The species card sits on the bottom edge; the Pokémon stands in the space above it.
+        var cardTop = Math.Max(640, size.Height - 390);
+        var middle = (TabsHeight + cardTop) / 2 + 6;
+        if (_pageKind == SummaryPage.Stats && s.Stats.Count == 6) PaintRadar(c, 300, middle, s);
+        else PaintPokemon(c, 300, middle, s);
+        PaintSpeciesCard(c, cardTop, s);
+    }
+
+    /// <summary>Draws the ball icon (20 px pixel art) into a square; false while it loads or when there is none.</summary>
+    private bool DrawBall(SKCanvas c, int ball, SKRect square)
+    {
+        var bitmap = _sprites.GetBall(ball);
+        if (bitmap is null)
+        {
+            _sprites.WarmBall(ball, () => MainThread.BeginInvokeOnMainThread(() => { _left.InvalidateSurface(); _page.InvalidateSurface(); }));
+            return false;
+        }
+        using var image = SKImage.FromBitmap(bitmap);
+        c.DrawImage(image, square, new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
+        return true;
+    }
+
+    /// <summary>
+    /// Showdown's static front sprite for the exact form (shiny when shiny), trimmed and
+    /// scaled by a whole number so its pixels stay square; PKHeX's art when Showdown has none.
+    /// </summary>
+    private void PaintPokemon(SKCanvas c, float cx, float cy, MonSummary s)
+    {
+        void Redraw() => MainThread.BeginInvokeOnMainThread(_left.InvalidateSurface);
+        if (s.IsEgg)
+        {
+            // No egg art ships with the sprite set: a plain speckled egg keeps the species a surprise.
+            var eh = 260f;
+            var egg = new SKRect(cx - eh * 0.38f, cy - eh / 2, cx + eh * 0.38f, cy + eh / 2);
+            using var shell = new SKPaint { Color = new SKColor(0xF4, 0xEE, 0xD8), IsAntialias = true };
+            using var spot = new SKPaint { Color = new SKColor(0x7F, 0xC4, 0x6A), IsAntialias = true };
+            c.DrawOval(egg, shell);
+            c.DrawCircle(egg.MidX - eh * 0.12f, egg.MidY - eh * 0.12f, eh * 0.08f, spot);
+            c.DrawCircle(egg.MidX + eh * 0.14f, egg.MidY + eh * 0.08f, eh * 0.1f, spot);
+            return;
+        }
+        if (!_sprites.TryGetShowdownFront(s.Look, Redraw, out var sprite)) return;
+        if (sprite is null)
+        {
+            sprite = _sprites.GetSprite(s.Look);
+            if (sprite is null) { _sprites.Warm(s.Look, Redraw); return; }
+        }
+        var k = Math.Clamp(MathF.Floor(Math.Min(520f / sprite.Width, 500f / sprite.Height)), 1, 7);
+        var w = sprite.Width * k;
+        var h = sprite.Height * k;
+        using var image = SKImage.FromBitmap(sprite);
+        c.DrawImage(image, new SKRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2),
+            new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
+    }
+
+    /// <summary>
+    /// The stats hexagon: the final stats (the largest near the rim) over the base stats, the
+    /// games' order clockwise from HP, the nature's raised and lowered stats tinted.
+    /// </summary>
+    private static void PaintRadar(SKCanvas c, float cx, float cy, MonSummary s)
+    {
+        const float radius = 158;
+        var top = Math.Max(1, s.Stats.Max()) * 1.08f;
+        SKPoint Point(int i, float r)
+        {
+            var angle = -MathF.PI / 2 + i * MathF.PI / 3;
+            return new SKPoint(cx + r * MathF.Cos(angle), cy + r * MathF.Sin(angle));
+        }
+        SKPath Polygon(Func<int, float> r)
+        {
+            var path = new SKPath();
+            for (var i = 0; i < 6; i++)
+            {
+                var p = Point(i, r(i));
+                if (i == 0) path.MoveTo(p); else path.LineTo(p);
+            }
+            path.Close();
+            return path;
+        }
+
+        using (var back = Polygon(_ => radius + 20))
+        using (var paint = new SKPaint { Color = StoragePaint.Well.WithAlpha(215), IsAntialias = true })
+            c.DrawPath(back, paint);
+        using (var ring = new SKPaint { Color = EditorPaint.Label, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3 })
+        {
+            foreach (var fraction in new[] { 0.25f, 0.5f, 0.75f, 1f })
+            {
+                using var path = Polygon(_ => radius * fraction);
+                c.DrawPath(path, ring);
+            }
+            ring.StrokeWidth = 2;
+            ring.Color = ring.Color.WithAlpha(200);
+            for (var i = 0; i < 6; i++) c.DrawLine(new SKPoint(cx, cy), Point(i, radius), ring);
+        }
+        using (var basePath = Polygon(i => radius * Math.Min(1f, (RadarOrder[i] < s.BaseStats.Count ? s.BaseStats[RadarOrder[i]] : 0) / 180f)))
+        using (var baseFill = new SKPaint { Color = ColorTheme.Current.RadarFill.WithAlpha(50), IsAntialias = true })
+            c.DrawPath(basePath, baseFill);
+        using (var shape = Polygon(i => radius * Math.Max(0.04f, s.Stats[RadarOrder[i]] / top)))
+        {
+            using var fill = new SKPaint { Color = Cyan.WithAlpha(120), IsAntialias = true };
+            using var line = new SKPaint { Color = ColorTheme.Current.RadarInk, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 4, StrokeJoin = SKStrokeJoin.Round };
+            c.DrawPath(shape, fill);
+            c.DrawPath(shape, line);
+            using var dot = new SKPaint { Color = ColorTheme.Current.RadarInk, IsAntialias = true };
+            for (var i = 0; i < 6; i++) c.DrawCircle(Point(i, radius * Math.Max(0.04f, s.Stats[RadarOrder[i]] / top)), 9, dot);
+        }
+        var nature = s.Fields?.StatNature ?? s.Nature;
+        var up = nature is { } n1 ? NatureFacts.Raised(n1) : null;
+        var down = nature is { } n2 ? NatureFacts.Lowered(n2) : null;
+        for (var i = 0; i < 6; i++)
+        {
+            var stat = RadarOrder[i];
+            var label = Point(i, radius + 58);
+            var tone = up == stat ? Raised : down == stat ? Lowered : ValueInk;
+            SummaryInk.Draw(c, StatCaps[stat], label.X, SummaryInk.Center(label.Y - 16, 30), 30, tone, align: SKTextAlign.Center);
+            SummaryInk.Draw(c, s.Stats[stat].ToString(), label.X, SummaryInk.Center(label.Y + 15, 30), 30, Pksm.Ink, align: SKTextAlign.Center);
+        }
+    }
+
+    /// <summary>The species card: species tab with the legality status, the type plates, ability and item.</summary>
+    private void PaintSpeciesCard(SKCanvas c, float top, MonSummary s)
+    {
+        var card = new SKRect(24, top, 590, top + 430);
+        using (var shadow = new SKPaint { Color = ColorTheme.Current.Shadow.WithAlpha(150), IsAntialias = true, MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 7) })
+            c.DrawRoundRect(SKRect.Create(card.Left, card.Top + 8, card.Width, card.Height), 28, 28, shadow);
+        using (var fill = new SKPaint { Color = CardFill, IsAntialias = true }) c.DrawRoundRect(card, 28, 28, fill);
+
+        // Ability and item rows first, so the card's rim and the tab draw over their ends.
+        var ability = s.IsEgg ? "—" : s.AbilityName ?? "—";
+        var item = s.IsEgg ? "—" : s.HeldItemName ?? "None";
+        (string Label, string Value)[] rows = [("Ability", ability), ("Item", item)];
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var y = top + 194 + i * 96;
+            using var band = new SKPaint { Color = i == 0 ? CardRow : CardFill };
+            c.DrawRect(new SKRect(27, y, 587, y + 92), band);
+            SummaryInk.Draw(c, rows[i].Label, 60, SummaryInk.Center(y + 46, 40), 40, LabelInk);
+            SummaryInk.Draw(c, SummaryInk.Fit(rows[i].Value, 40, 360), 560, SummaryInk.Center(y + 46, 40), 40, ValueInk, align: SKTextAlign.Right);
+        }
+        using (var rim = new SKPaint { Color = CardEdge, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3 })
+            c.DrawRoundRect(SKRect.Inflate(card, -1.5f, -1.5f), 28, 28, rim);
+
+        using (var tab = Tab(new SKRect(24, top, 420, top + 78), 24, 36))
+        {
+            using var fill = new SKPaint { Color = SpeciesFill, IsAntialias = true };
+            c.DrawPath(tab, fill);
+            Outline(c, tab, SpeciesEdge, 3);
+        }
+        var species = s.FormName.Length > 0 ? $"{s.SpeciesName} ({s.FormName})" : s.SpeciesName;
+        SummaryInk.Draw(c, SummaryInk.Fit(species, 42, 330), 52, SummaryInk.Center(top + 39, 42), 42, SpeciesInk);
+        var (status, tone) = Status(s);
+        SummaryInk.Draw(c, SummaryInk.Fit(status, 36, 150), 572, SummaryInk.Center(top + 39, 36), 36, tone, align: SKTextAlign.Right);
+
+        if (s.IsEgg) return;
+        var types = s.Types.Where(TypeFacts.IsValid).ToList();
+        const float plate = 184, gap = 20;
+        var x = 307 - (types.Count * plate + Math.Max(0, types.Count - 1) * gap) / 2;
+        foreach (var type in types)
+        {
+            TypePlates.Paint(c, new SKRect(x, top + 106, x + plate, top + 166), type);
+            x += plate + gap;
+        }
+    }
+
+    private (string Text, SKColor Color) Status(MonSummary s)
+    {
+        if (_legalityPending) return ("Checking…", ValueInk);
+        return s.Legal switch
+        {
+            true => ("Legal", Pksm.Legal),
+            false => ("Illegal", Pksm.Illegal),
+            _ => ("Not checked", ValueInk),
+        };
+    }
+
+    // ── Page ─────────────────────────────────────────────────────────────────
+
+    /// <summary>Measures the page; the scroll keeps within it.</summary>
     private void RefreshPage(bool resetScroll)
     {
-        var width = (float)_page.Width;
-        if (_summary is null || width <= 0) return;
-        _contentHeight = RenderPage(null, _summary, width);
+        if (_summary is null || _page.Width <= 0) return;
+        var width = (float)(_page.Width / _unit);
+        _contentHeight = RenderPage(null, _summary, width - PX0) + 30;
         if (resetScroll)
         {
             StopFling();
@@ -371,276 +593,185 @@ public sealed class MonSummaryView : ContentView
         _page.InvalidateSurface();
     }
 
-    /// <summary>Scales a canvas so everything below paints in device-independent units; returns the width in dp.</summary>
-    private static float BeginDp(SKCanvas canvas, SKImageInfo info, View view)
-    {
-        canvas.Clear(SKColors.Transparent);
-        var scale = view.Width > 0 ? (float)(info.Width / view.Width) : (float)Math.Max(1, DeviceDisplay.MainDisplayInfo.Density);
-        canvas.Scale(scale);
-        return info.Width / scale;
-    }
-
-    // ── Tabs ─────────────────────────────────────────────────────────────────
-
-    private void PaintTabs(object? sender, SKPaintSurfaceEventArgs args)
-    {
-        var c = args.Surface.Canvas;
-        var w = BeginDp(c, args.Info, _tabs);
-        var h = args.Info.Height * (w / args.Info.Width);
-        const float gap = 5;
-        var cell = (w - gap * 4) / 5;
-        for (var i = 0; i < 5; i++)
-        {
-            var page = (SummaryPage)i;
-            var r = new SKRect(i * (cell + gap), 1, i * (cell + gap) + cell, h - 1);
-            SummaryChrome.Tab(c, r, TabTitle(page), page == _pageKind, SummaryChrome.Accent(page));
-        }
-    }
-
-    private void OnTabTouch(object? sender, SKTouchEventArgs args)
-    {
-        args.Handled = true;
-        if (args.ActionType != SKTouchAction.Pressed) return;
-        var widthPx = _tabs.CanvasSize.Width;
-        if (widthPx <= 0) return;
-        var index = Math.Clamp((int)(args.Location.X / widthPx * 5), 0, 4);
-        SetPage((SummaryPage)index, raise: true);
-    }
-
-    // ── Hero ─────────────────────────────────────────────────────────────────
-
-    private void PaintFacts(object? sender, SKPaintSurfaceEventArgs args)
-    {
-        var c = args.Surface.Canvas;
-        var w = BeginDp(c, args.Info, _facts);
-        if (_summary is not { } s) return;
-
-        // The name bar: the app's cobalt header strip, gender and shiny at its end.
-        var bar = new SKRect(0, 0, w, 34);
-        var hasGender = s.Gender is 0 or 1 && !s.IsEgg;
-        var marks = (s.IsShiny ? 22 : 0) + (hasGender ? 22 : 0);
-        var name = SummaryInk.Fit(s.IsEgg ? "Egg" : s.DisplayName, 17, w - 24 - marks, bold: true);
-        SummaryChrome.Strip(c, bar, name, size: 17);
-        var x = w - 12;
-        if (hasGender)
-        {
-            var (glyph, tone) = s.Gender == 0 ? ("♂", new SKColor(0x8C, 0xC8, 0xFF)) : ("♀", new SKColor(0xFF, 0x9C, 0xC0));
-            SummaryInk.Draw(c, glyph, x, SummaryInk.Center(bar.MidY, 17), 17, tone, bold: true, align: SKTextAlign.Right);
-            x -= 22;
-        }
-        if (s.IsShiny) SummaryInk.Draw(c, "★", x, SummaryInk.Center(bar.MidY, 16), 16, Pksm.ShinyGold, align: SKTextAlign.Right);
-
-        var species = s.FormName.Length > 0 ? $"{s.SpeciesName} ({s.FormName})" : s.SpeciesName;
-        var identity = s.IsEgg ? $"No. {s.Species:000}  {species}" : $"No. {s.Species:000}  {species}   Lv. {s.Level}";
-        SummaryInk.Draw(c, SummaryInk.Fit(identity, 14.5f, w - 4), 2, SummaryInk.Center(52, 14.5f), 14.5f, Pksm.Ink);
-
-        var tx = 2f;
-        foreach (var type in s.Types)
-        {
-            SummaryChrome.TypeBadge(c, new SKRect(tx, 66, tx + 70, 86), type);
-            tx += 76;
-        }
-
-        // Status as coloured text, the way the games print it - no chips.
-        var sx = 2f;
-        var sy = SummaryInk.Center(103, 13.5f);
-        void Run(string text, SKColor color)
-        {
-            if (sx > w) return;
-            sx += SummaryInk.Draw(c, text, sx, sy, 13.5f, color) + 12;
-        }
-        Run(Kit.ConsoleCode(s.Generation), Sk(Kit.EraColor(s.Generation)));
-        Run(s.Format.ToUpperInvariant(), Pksm.InkSoft);
-        if (Verdict() is { } verdict) Run(verdict.Text, verdict.Color);
-        if (s.Pokerus is { Status: not PokerusStatus.Susceptible } rus)
-            Run(rus.Status == PokerusStatus.Infectious ? "Pokérus" : "Pokérus ✓", new SKColor(0xE0, 0x7A, 0xD0));
-        if (s.RibbonCount + s.MarkCount > 0) Run($"✦ {s.RibbonCount + s.MarkCount}", Pksm.RibbonGold);
-
-        if (!string.IsNullOrEmpty(_caption))
-            SummaryInk.Draw(c, SummaryInk.Fit(_caption, 12.5f, w - 4), 2, SummaryInk.Center(123, 12.5f), 12.5f, Pksm.InkSoft);
-    }
-
-    private static SKColor Sk(Color color) => new((byte)(color.Red * 255), (byte)(color.Green * 255), (byte)(color.Blue * 255));
-
-    private (string Text, SKColor Color)? Verdict()
-    {
-        if (_legalityPending) return ("Checking…", Pksm.InkSoft);
-        return _summary?.Legal switch
-        {
-            true => ("✓ Legal", Pksm.Legal),
-            false => ("✗ Not legal", Pksm.Illegal),
-            _ => null,
-        };
-    }
-
-    // ── Pages ────────────────────────────────────────────────────────────────
-
-    private static readonly SKPaint ThumbPaint = new() { IsAntialias = true, Color = SKColors.White.WithAlpha(0x70) };
-
-    /// <summary>A slim thumb on the right edge while the page is taller than its viewport.</summary>
-    private void PaintScrollThumb(SKCanvas c, float w, float h)
-    {
-        var max = MaxScroll;
-        if (max <= 0 || h <= 0) return;
-        var length = Math.Max(24, h * h / (float)_contentHeight);
-        var top = (float)(_scrollY / max) * (h - length);
-        c.DrawRoundRect(new SKRect(w - 4, top, w - 1, top + length), 1.5f, 1.5f, ThumbPaint);
-    }
-
     private void PaintPage(object? sender, SKPaintSurfaceEventArgs args)
     {
         var watch = Stopwatch.StartNew();
         var c = args.Surface.Canvas;
-        var w = BeginDp(c, args.Info, _page);
-        if (_summary is { } s)
+        var size = BeginDesign(c, args.Info, _page);
+        if (_summary is not { } s) return;
+
+        // The panel the tabs sit on, running off the right and bottom edges.
+        var panel = new SKRect(0, PanelTop, size.Width + 40, size.Height + 40);
+        using (var shadow = new SKPaint { Color = ColorTheme.Current.Shadow.WithAlpha(150), IsAntialias = true, MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 7) })
+            c.DrawRoundRect(SKRect.Create(panel.Left - 6, panel.Top + 8, panel.Width, panel.Height), 40, 40, shadow);
+        using (var fill = new SKPaint { Color = PanelFill, IsAntialias = true }) c.DrawRoundRect(panel, 40, 40, fill);
+        using (var rim = new SKPaint { Color = Cyan, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 4 })
+            c.DrawRoundRect(SKRect.Inflate(panel, -2, -2), 38, 38, rim);
+
+        c.Save();
+        c.ClipRect(new SKRect(4, TabsHeight + 4, size.Width, size.Height)); // scrolled rows never show between the tabs
+        c.Translate(0, ContentTop - (float)_scrollY);
+        RenderPage(c, s, size.Width - PX0);
+        c.Restore();
+
+        var viewport = size.Height - ContentTop;
+        if (MaxScroll > 0 && viewport > 0)
         {
-            c.Save();
-            c.Translate(0, -(float)_scrollY);
-            RenderPage(c, s, w);
-            c.Restore();
-            PaintScrollThumb(c, w, (float)_page.Height);
+            var length = (float)Math.Max(40, viewport * viewport / _contentHeight);
+            var y = ContentTop + (float)(_scrollY / MaxScroll) * (viewport - length);
+            using var thumb = new SKPaint { IsAntialias = true, Color = ColorTheme.Current.Bright.WithAlpha(0x70) };
+            c.DrawRoundRect(new SKRect(size.Width - 9, y, size.Width - 4, y + length), 2.5f, 2.5f, thumb);
         }
         PerfTrace.Log("summary.paint-page", watch);
     }
 
-    /// <summary>One pass that both measures (canvas null) and paints; returns the page height.</summary>
-    private float RenderPage(SKCanvas? c, MonSummary s, float w)
+    /// <summary>One pass that both measures (canvas null) and paints from y 0; returns the page height.</summary>
+    private float RenderPage(SKCanvas? c, MonSummary s, float right)
     {
-        var y = _pageKind switch
+        var blocks = _pageKind switch
         {
-            SummaryPage.Info => InfoPage(c, s, w),
-            SummaryPage.Stats => StatsPage(c, s, w),
-            SummaryPage.Moves => MovesPage(c, s, w),
-            SummaryPage.Origin => OriginPage(c, s, w),
-            _ => LegalityPage(c, s, w),
+            SummaryPage.Info => InfoPage(s),
+            SummaryPage.Stats => StatsPage(s),
+            SummaryPage.Moves => MovesPage(s),
+            SummaryPage.Origin => OriginPage(s),
+            _ => LegalityPage(s),
         };
-        return y + 8;
-    }
-
-    /// <summary>A row of a section: paints at (x, y) within width w (or only measures when c is null); returns its height.</summary>
-    private delegate float Row(SKCanvas? c, float x, float y, float w);
-
-    private const float SectionGap = 10;
-    private const float Pad = 6;
-    private const float StripHeight = 28;
-    private const float ShadowInset = 3;
-
-    /// <summary>A page section: a device panel carrying its accent header strip and rows split by hairlines.</summary>
-    private static float Section(SKCanvas? c, float y, float w, string title, SKColor accent, IReadOnlyList<Row> rows, string? trailing = null)
-    {
-        var panelWidth = w - ShadowInset;
-        var inner = panelWidth - Pad * 2;
-        var heights = new float[rows.Count];
-        var total = Pad + StripHeight + 2;
-        for (var i = 0; i < rows.Count; i++) total += heights[i] = rows[i](null, Pad, 0, inner);
-        total += Pad;
-        if (c is not null)
-        {
-            SummaryChrome.Panel(c, new SKRect(0, y, panelWidth, y + total));
-            SummaryChrome.Strip(c, new SKRect(Pad, y + Pad, panelWidth - Pad, y + Pad + StripHeight), title, accent, trailing: trailing);
-            var ry = y + Pad + StripHeight + 2;
-            for (var i = 0; i < rows.Count; i++)
-            {
-                if (i > 0) SummaryChrome.Divider(c, Pad + 4, panelWidth - Pad - 4, ry);
-                rows[i](c, Pad, ry, inner);
-                ry += heights[i];
-            }
-        }
-        return y + total + SectionGap;
-    }
-
-    private const float ValueSize = 14.5f;
-    private const float CaptionSize = 13f;
-    private const float DetailSize = 12.5f;
-    private const float CaptionWidth = 104;
-
-    /// <summary>A fact: the caption in soft ink on the left, the value (and its quiet detail) beside it.</summary>
-    private static Row Fact(string caption, string value, string? detail = null) => (c, x, y, w) =>
-    {
-        var valueWidth = w - CaptionWidth - 12;
-        var lines = SummaryInk.Wrap(value, ValueSize, valueWidth);
-        var details = string.IsNullOrWhiteSpace(detail) ? [] : SummaryInk.Wrap(detail, DetailSize, valueWidth);
-        var height = 8 + lines.Count * SummaryInk.Leading(ValueSize) + details.Count * SummaryInk.Leading(DetailSize) + 7;
-        if (c is null) return height;
-        var firstMid = y + 8 + SummaryInk.Leading(ValueSize) / 2;
-        SummaryInk.Draw(c, caption, x + 8, SummaryInk.Center(firstMid, CaptionSize), CaptionSize, Pksm.InkSoft);
-        var ly = SummaryInk.Center(firstMid, ValueSize);
-        foreach (var line in lines) { SummaryInk.Draw(c, line, x + CaptionWidth, ly, ValueSize, Pksm.Ink); ly += SummaryInk.Leading(ValueSize); }
-        ly += SummaryInk.Leading(DetailSize) - SummaryInk.Leading(ValueSize);
-        foreach (var line in details) { SummaryInk.Draw(c, line, x + CaptionWidth, ly, DetailSize, Pksm.InkSoft); ly += SummaryInk.Leading(DetailSize); }
-        return height;
-    };
-
-    /// <summary>A fact whose value is drawn by the caller (type badges, marking glyphs).</summary>
-    private static Row FactArt(string caption, Action<SKCanvas, float, float> paint, float height = 34) => (c, x, y, w) =>
-    {
-        if (c is null) return height;
-        SummaryInk.Draw(c, caption, x + 8, SummaryInk.Center(y + height / 2, CaptionSize), CaptionSize, Pksm.InkSoft);
-        paint(c, x + CaptionWidth, y + height / 2);
-        return height;
-    };
-
-    /// <summary>Wrapped free text (notes, lists) with the section's insets.</summary>
-    private static Row Text(string text, SKColor color, float size = 13.5f) => (c, x, y, w) =>
-    {
-        var lines = SummaryInk.Wrap(text, size, w - 16);
-        var height = 8 + lines.Count * SummaryInk.Leading(size) + 7;
-        if (c is null) return height;
-        var ly = SummaryInk.Center(y + 8 + SummaryInk.Leading(size) / 2, size);
-        foreach (var line in lines) { SummaryInk.Draw(c, line, x + 8, ly, size, color); ly += SummaryInk.Leading(size); }
-        return height;
-    };
-
-    private static Row Note(string text, SKColor? tone = null) => Text(text, tone ?? NoteInk);
-
-    private static float InfoPage(SKCanvas? c, MonSummary s, float w)
-    {
-        var accent = SummaryChrome.Accent(SummaryPage.Info);
         var y = 0f;
+        foreach (var block in blocks) y += block(c, y, right);
+        return y;
+    }
+
+    /// <summary>A block of a page: paints at y (or only measures when c is null) between PX0 and right; returns its height.</summary>
+    private delegate float Block(SKCanvas? c, float y, float right);
+
+    /// <summary>A section divider: the title in a slanted chip between fading rails.</summary>
+    private static Block Divider(string title) => (c, y, right) =>
+    {
+        if (c is not null)
+            EditorPaint.PaintSection(c, new SKRect(PX0 - 18, y, right + 18, y + 96), title, PixelFont.Face, 34f / 30f);
+        return 96;
+    };
+
+    /// <summary>
+    /// A fact: the caption in its own darker column, the value beside it, and quiet detail
+    /// lines under the value. <paramref name="art"/> draws the value instead (badges, glyphs).
+    /// </summary>
+    private static Block Row(string label, string value, string? detail = null, SKColor? tone = null, Action<SKCanvas, float, float>? art = null) => (c, y, right) =>
+    {
+        var details = string.IsNullOrWhiteSpace(detail) ? [] : SummaryInk.Wrap(detail, 26, right - ValueX - 8);
+        var height = 98 + 34 * details.Count;
+        if (c is null) return height;
+        using (var column = new SKPaint { Color = LabelColumn }) c.DrawRect(new SKRect(4, y, LabelColumnRight, y + height - 6), column);
+        var valueY = details.Count > 0 ? y + 46 : y + height / 2f;
+        // A long caption ("Hidden Power") shrinks a little before it is cut.
+        var labelSize = 38f;
+        while (labelSize > 30 && SummaryInk.Width(label, labelSize) > LabelColumnRight - LabelX - 6) labelSize -= 2;
+        SummaryInk.Draw(c, SummaryInk.Fit(label, labelSize, LabelColumnRight - LabelX - 6), LabelX, SummaryInk.Center(valueY, labelSize), labelSize, LabelInk);
+        if (art is not null) art(c, ValueX, valueY);
+        else SummaryInk.Draw(c, SummaryInk.Fit(value, 38, right - ValueX - 8), ValueX, SummaryInk.Center(valueY, 38), 38, tone ?? ValueInk);
+        for (var i = 0; i < details.Count; i++)
+            SummaryInk.Draw(c, details[i], ValueX, SummaryInk.Center(y + 92 + 34 * i, 26), 26, SubInk);
+        GlowLine(c, PX0, right, y + height - 4);
+        return height;
+    };
+
+    /// <summary>Centered free text (notes, lists).</summary>
+    private static Block Text(string text, SKColor? tone = null) => (c, y, right) =>
+    {
+        var lines = SummaryInk.Wrap(text, 32, right - PX0 - 60);
+        var height = 20 + 44 * lines.Count;
+        if (c is null) return height;
+        for (var i = 0; i < lines.Count; i++)
+            SummaryInk.Draw(c, lines[i], (PX0 + right) / 2, SummaryInk.Center(y + 32 + 44 * i, 32), 32, tone ?? ValueInk, align: SKTextAlign.Center);
+        return height;
+    };
+
+    /// <summary>The page's headline: a big coloured verdict and one line under it.</summary>
+    private static Block Hero(string title, SKColor tone, string detail) => (c, y, right) =>
+    {
+        if (c is null) return 150;
+        var mid = (PX0 + right) / 2;
+        SummaryInk.Draw(c, title, mid, SummaryInk.Center(y + 56, 64), 64, tone, align: SKTextAlign.Center);
+        SummaryInk.Draw(c, SummaryInk.Fit(detail, 30, right - PX0 - 20), mid, SummaryInk.Center(y + 116, 30), 30, ValueInk, align: SKTextAlign.Center);
+        return 150;
+    };
+
+    /// <summary>
+    /// A separator line under a block: brightest at the middle, fading toward both ends.
+    /// </summary>
+    private static void GlowLine(SKCanvas c, float left, float right, float y)
+    {
+        (SKColor Color, byte Edge, byte Middle)[] rows =
+        [
+            (ColorTheme.Current.GlowHigh, 40, 210),
+            (ColorTheme.Current.GlowMid, 30, 150),
+            (ColorTheme.Current.GlowLow, 20, 80),
+        ];
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var (color, edge, middle) = rows[i];
+            using var shader = SKShader.CreateLinearGradient(new SKPoint(left, 0), new SKPoint(right, 0),
+                [color.WithAlpha(edge), color.WithAlpha(middle), color.WithAlpha(edge)], SKShaderTileMode.Clamp);
+            using var paint = new SKPaint { Shader = shader };
+            c.DrawRect(new SKRect(left, y + i, right, y + i + 1), paint);
+        }
+    }
+
+    // ── Info ─────────────────────────────────────────────────────────────────
+
+    private List<Block> InfoPage(MonSummary s)
+    {
+        var blocks = new List<Block>();
         if (s.IsEgg)
-            y = Section(c, y, w, "Egg", accent, [Note("This Pokémon is still an egg: its stats and moves appear once it hatches.")]);
+        {
+            blocks.Add(Divider("Egg"));
+            blocks.Add(Text("This Pokémon is still an egg: its stats and moves appear once it hatches."));
+        }
 
         var f = s.Fields;
-        var trainer = new List<Row> { Fact("OT", s.OriginalTrainer.Length > 0 ? s.OriginalTrainer : "—", f?.OtGender is { } otGender ? GenderWord(otGender) : null) };
+        blocks.Add(Divider("Trainer"));
+        blocks.Add(Row("OT", s.OriginalTrainer.Length > 0 ? s.OriginalTrainer : "—", f?.OtGender is { } otGender ? GenderWord(otGender) : null));
         if (s.TrainerId is { } tid)
-            trainer.Add(Fact("ID No.", s.SecretId is { } sid ? $"{tid:00000}   SID {sid:00000}" : $"{tid:00000}"));
+            blocks.Add(Row("ID No.", $"{tid:00000}", s.SecretId is { } sid ? $"SID {sid:00000}" : null));
         if (f?.HandlerName is { } handler)
         {
             var about = new[] { f.HandlerGender is { } hg ? GenderWord(hg) : null, f.HandlerLanguage, f.HandlerFriendship is { } hf ? $"friendship {hf}" : null };
-            trainer.Add(Fact("Handler", handler, string.Join(" · ", about.Where(x => x is not null))));
-            trainer.Add(Fact("Now with", f.WithHandler == true ? handler : "Its original trainer",
+            blocks.Add(Row("Handler", handler, string.Join(" · ", about.Where(x => x is not null))));
+            blocks.Add(Row("Now with", f.WithHandler == true ? handler : "Its original trainer",
                 f.WithHandler == true && f.OtFriendship is { } otf ? $"OT friendship {otf}" : null));
         }
-        y = Section(c, y, w, "Trainer", accent, trainer);
 
-        var character = new List<Row>();
+        blocks.Add(Divider("Character"));
+        var character = blocks.Count;
         if (s.NatureName is not null && s.Nature is { } nature)
-            character.Add(Fact("Nature", s.NatureName, NatureFacts.IsNeutral(nature) ? "Neutral: no stat is raised or lowered." : NatureFacts.EffectLabel(nature)));
+            blocks.Add(Row("Nature", s.NatureName, NatureFacts.IsNeutral(nature) ? "Neutral: no stat is raised or lowered." : NatureFacts.EffectLabel(nature)));
         if (f?.StatNature is { } mint)
-            character.Add(Fact("Mint", f.StatNatureName ?? $"#{mint}", $"Stats follow it: {(NatureFacts.IsNeutral(mint) ? "neutral" : NatureFacts.EffectLabel(mint))}"));
-        if (f?.FormArgument is { } formArgument) character.Add(Fact("Form", s.FormName.Length > 0 ? s.FormName : s.SpeciesName, formArgument));
+            blocks.Add(Row("Mint", f.StatNatureName ?? $"#{mint}", $"Stats follow it: {(NatureFacts.IsNeutral(mint) ? "neutral" : NatureFacts.EffectLabel(mint))}"));
+        if (f?.FormArgument is { } formArgument) blocks.Add(Row("Form", s.FormName.Length > 0 ? s.FormName : s.SpeciesName, formArgument));
         if (s.IsShiny && f?.Shiny is ShinyKind.Square or ShinyKind.Star)
-            character.Add(Fact("Shiny", f.Shiny == ShinyKind.Square ? "Square sparkles" : "Star sparkles"));
-        if (s.Characteristic is not null) character.Add(Fact("Trait", s.Characteristic));
-        if (s.AbilityName is not null) character.Add(Fact("Ability", s.AbilityName, s.AbilityEffect));
-        if (character.Count == 0) character.Add(Note("Gen 1 and 2 Pokémon have no nature or ability."));
-        y = Section(c, y, w, "Character", accent, character);
+            blocks.Add(Row("Shiny", f.Shiny == ShinyKind.Square ? "Square sparkles" : "Star sparkles"));
+        if (s.Characteristic is not null) blocks.Add(Row("Trait", s.Characteristic));
+        if (s.AbilityName is not null) blocks.Add(Row("Ability", s.AbilityName, s.AbilityEffect));
+        if (blocks.Count == character) blocks.Add(Text("Gen 1 and 2 Pokémon have no nature or ability."));
 
-        var items = new List<Row>
+        blocks.Add(Divider("Items & care"));
+        blocks.Add(Row("Held item", s.HeldItemName ?? "None", s.HeldItemEffect));
+        blocks.Add(Row("Ball", s.BallName, art: (canvas, x, cy) =>
         {
-            Fact("Held item", s.HeldItemName ?? "None", s.HeldItemEffect),
-            Fact("Ball", s.BallName),
-        };
-        if (!s.IsEgg) items.Add(Fact("Friendship", $"{s.Friendship} / 255", FriendshipLine(s.Friendship)));
+            var drawn = DrawBall(canvas, s.Ball, new SKRect(x, cy - 20, x + 40, cy + 20));
+            var textX = drawn ? x + 54 : x;
+            SummaryInk.Draw(canvas, s.BallName, textX, SummaryInk.Center(cy, 38), 38, ValueInk);
+        }));
+        if (!s.IsEgg) blocks.Add(Row("Friendship", $"{s.Friendship} / 255", FriendshipLine(s.Friendship)));
         if (s.Pokerus is { } rus)
-            items.Add(Fact("Pokérus", rus.Status switch
+            blocks.Add(rus.Status switch
             {
-                PokerusStatus.Infectious => $"Infected (strain {rus.Strain}, {rus.Days} day(s) left)",
-                PokerusStatus.Cured => "Cured: EV gains stay doubled",
-                _ => "Never infected",
-            }));
-        if (s.Markings.Count > 0) items.Add(FactArt("Markings", (canvas, x, cy) => Markings(canvas, x, cy, s.Markings)));
-        return Section(c, y, w, "Items & care", accent, items);
+                PokerusStatus.Infectious => Row("Pokérus", "Infected", $"Strain {rus.Strain}, {rus.Days} day(s) left"),
+                PokerusStatus.Cured => Row("Pokérus", "Cured", "EV gains stay doubled"),
+                _ => Row("Pokérus", "Never infected"),
+            });
+        if (s.Markings.Count > 0) blocks.Add(Row("Markings", "", art: (canvas, x, cy) => Markings(canvas, x, cy, s.Markings)));
+        return blocks;
     }
 
     private static string GenderWord(int gender) => gender == 1 ? "Female" : "Male";
@@ -660,446 +791,286 @@ public sealed class MonSummaryView : ContentView
         {
             var value = markings[i].Value;
             // Gen 7+ markings are two-colour (1 blue, 2 red); older games only have "on".
-            var color = value == 0 ? Pksm.PaperEdge : value == 2 ? Pksm.Illegal : Pksm.SelectBorder;
-            x += SummaryInk.Draw(c, i < MarkingGlyphs.Length ? MarkingGlyphs[i] : "•", x, SummaryInk.Center(cy, 15), 15, color) + 8;
+            var color = value == 0 ? LabelInk : value == 2 ? Pksm.Illegal : Pksm.SignalBlue;
+            x += SummaryInk.Draw(c, i < MarkingGlyphs.Length ? MarkingGlyphs[i] : "•", x, SummaryInk.Center(cy, 38), 38, color) + 10;
         }
     }
 
-    private static float StatsPage(SKCanvas? c, MonSummary s, float w)
+    // ── Stats ────────────────────────────────────────────────────────────────
+
+    private const float StatColumn = 192, BaseColumn = 312, IvColumn = 412, EvColumn = 502;
+
+    private static List<Block> StatsPage(MonSummary s)
     {
-        var accent = SummaryChrome.Accent(SummaryPage.Stats);
-        var y = 0f;
+        var blocks = new List<Block>();
         if (s.Stats.Count == 6)
         {
-            const float radar = 192;
-            if (c is not null) PaintRadar(c, new SKRect(0, y, w - ShadowInset, y + radar), s, accent);
-            y += radar + 6;
-        }
-        y = Section(c, y, w, "Stats", accent, StatRows(s));
-
-        var extras = new List<Row>();
-        if (s.HiddenPowerType is { } hp)
-            extras.Add(FactArt("Hidden Power", (canvas, x, cy) => SummaryChrome.TypeBadge(canvas, new SKRect(x, cy - 10, x + 76, cy + 10), hp)));
-        if (s.TeraType is { } tera && TypeFacts.IsValid(tera))
-            extras.Add(FactArt("Tera Type", (canvas, x, cy) => SummaryChrome.TypeBadge(canvas, new SKRect(x, cy - 10, x + 76, cy + 10), tera)));
-        else if (s.TeraTypeName is not null) extras.Add(Fact("Tera Type", s.TeraTypeName));
-        if (s.Characteristic is not null) extras.Add(Fact("Trait", s.Characteristic));
-        if (extras.Count > 0) y = Section(c, y, w, "Potential", accent, extras);
-        return y;
-    }
-
-    /// <summary>The base · IV · EV · stat table, ruled like the games' own, nature tints on the names.</summary>
-    private static List<Row> StatRows(MonSummary s)
-    {
-        const float rowHeight = 25;
-        float ColBase(float x) => x + 112;
-        float ColStat(float x, float w) => x + w - 8;
-        float ColEv(float x, float w) => ColStat(x, w) - 50;
-        float ColIv(float x, float w) => ColEv(x, w) - (s.ClassicTraining ? 64 : 46);
-        // A mint moves the stat changes off the nature: tint what the stats actually follow.
-        var statNature = s.Fields?.StatNature ?? s.Nature;
-        var up = statNature is { } sn ? NatureFacts.Raised(sn) : null;
-        var down = statNature is { } dn ? NatureFacts.Lowered(dn) : null;
-        var rows = new List<Row>
-        {
-            (c, x, y, w) =>
+            blocks.Add((c, y, _) =>
             {
-                const float h = 22;
-                if (c is null) return h;
-                var baseline = SummaryInk.Center(y + h / 2 + 1, 12.5f);
-                SummaryInk.Draw(c, "Base", ColBase(x), baseline, 12.5f, Pksm.InkSoft, align: SKTextAlign.Right);
-                SummaryInk.Draw(c, s.ClassicTraining ? "DV" : "IV", ColIv(x, w), baseline, 12.5f, Pksm.InkSoft, align: SKTextAlign.Right);
-                SummaryInk.Draw(c, s.ClassicTraining ? "Exp" : "EV", ColEv(x, w), baseline, 12.5f, Pksm.InkSoft, align: SKTextAlign.Right);
-                SummaryInk.Draw(c, "Stat", ColStat(x, w), baseline, 12.5f, Pksm.InkSoft, align: SKTextAlign.Right);
-                return h;
-            },
-            (c, x, y, w) =>
+                if (c is null) return 60;
+                (float X, string Text)[] heads = [(StatColumn, "Stat"), (BaseColumn, "Base"), (IvColumn, s.ClassicTraining ? "DV" : "IV"), (EvColumn, s.ClassicTraining ? "Exp" : "EV")];
+                foreach (var (x, text) in heads) SummaryInk.Draw(c, text, x, SummaryInk.Center(y + 30, 30), 30, LabelInk, align: SKTextAlign.Center);
+                return 60;
+            });
+            // A mint moves the stat changes off the nature: tint what the stats actually follow.
+            var statNature = s.Fields?.StatNature ?? s.Nature;
+            var up = statNature is { } sn ? NatureFacts.Raised(sn) : null;
+            var down = statNature is { } dn ? NatureFacts.Lowered(dn) : null;
+            for (var i = 0; i < 6; i++)
             {
-                const float h = rowHeight * 7 + 2;
-                if (c is null) return h;
-                for (var i = 0; i <= 6; i++)
+                var stat = i;
+                blocks.Add((c, y, right) =>
                 {
-                    var top = y + i * rowHeight;
-                    var mid = top + rowHeight / 2;
-                    // Alternating soft stripes, the StripeRow rhythm of the app's lists.
-                    if (i % 2 == 0 && i < 6) SummaryChrome.Band(c, new SKRect(x + 2, top, x + w - 2, top + rowHeight), Pksm.PaperShade.WithAlpha(0x80));
-                    var baseline = SummaryInk.Center(mid, 14);
-                    if (i == 6)
-                    {
-                        SummaryChrome.Divider(c, x + 4, x + w - 4, top + 1);
-                        SummaryInk.Draw(c, "Total", x + 8, baseline, 13.5f, Pksm.InkSoft);
-                        SummaryInk.Draw(c, s.BaseTotal.ToString(), ColBase(x), baseline, 14, Pksm.InkSoft, align: SKTextAlign.Right);
-                        SummaryInk.Draw(c, s.IvTotal.ToString(), ColIv(x, w), baseline, 14, Pksm.InkSoft, align: SKTextAlign.Right);
-                        if (!s.ClassicTraining) SummaryInk.Draw(c, s.EvTotal.ToString(), ColEv(x, w), baseline, 14, Pksm.InkSoft, align: SKTextAlign.Right);
-                        if (s.Stats.Count == 6) SummaryInk.Draw(c, s.Stats.Sum().ToString(), ColStat(x, w), baseline, 14, Pksm.InkSoft, align: SKTextAlign.Right);
-                        continue;
-                    }
-                    var tone = up == i ? Raised : down == i ? Lowered : Pksm.Ink;
-                    SummaryInk.Draw(c, StatNames[i], x + 8, baseline, 14, tone);
-                    var baseValue = i < s.BaseStats.Count ? s.BaseStats[i] : 0;
-                    SummaryInk.Draw(c, baseValue.ToString(), ColBase(x), baseline, 14, Pksm.InkSoft, align: SKTextAlign.Right);
-                    var barLeft = ColBase(x) + 10;
-                    var barRight = ColIv(x, w) - 34;
-                    if (barRight > barLeft + 10)
-                        SummaryChrome.Gauge(c, new SKRect(barLeft, mid - 4, barRight, mid + 4), baseValue / 180f, Sk(InfoKit.BaseStatColor(baseValue)));
-                    var iv = i < s.IVs.Count ? s.IVs[i] : 0;
-                    SummaryInk.Draw(c, iv.ToString(), ColIv(x, w), baseline, 14, iv >= s.Caps.IvMax ? Pksm.Legal : Pksm.Ink, align: SKTextAlign.Right);
-                    SummaryInk.Draw(c, i < s.EVs.Count ? s.EVs[i].ToString() : "0", ColEv(x, w), baseline, 14, Pksm.Ink, align: SKTextAlign.Right);
-                    SummaryInk.Draw(c, i < s.Stats.Count ? s.Stats[i].ToString() : "—", ColStat(x, w), baseline, 14, tone, bold: true, align: SKTextAlign.Right);
-                }
-                return h;
-            },
-        };
-        var legend = s.Nature is null
-            ? s.ClassicTraining ? "DVs run 0-15; stat experience up to 65535 per stat." : null
-            : s.Fields?.StatNatureName is { } mintName ? up is null ? $"Minted {mintName}: neutral stats." : $"Red raised · blue lowered by the {mintName} mint."
-            : s.NatureUp is null ? $"{s.NatureName}: a neutral nature." : $"Red raised · blue lowered by {s.NatureName}.";
-        if (legend is not null) rows.Add(Text(legend, Pksm.InkSoft, 12.5f));
-        return rows;
+                    if (c is null) return 84;
+                    var mid = y + 42;
+                    var tone = up == stat ? Raised : down == stat ? Lowered : LabelInk;
+                    SummaryInk.Draw(c, StatCaps[stat], LabelX, SummaryInk.Center(mid, 40), 40, tone);
+                    SummaryInk.Draw(c, s.Stats[stat].ToString(), StatColumn, SummaryInk.Center(mid, 40), 40, ValueInk, align: SKTextAlign.Center);
+                    var baseValue = stat < s.BaseStats.Count ? s.BaseStats[stat] : 0;
+                    var iv = stat < s.IVs.Count ? s.IVs[stat] : 0;
+                    var ev = stat < s.EVs.Count ? s.EVs[stat] : 0;
+                    SummaryInk.Draw(c, baseValue.ToString(), BaseColumn, SummaryInk.Center(mid, 36), 36, ValueInk, align: SKTextAlign.Center);
+                    SummaryInk.Draw(c, iv.ToString(), IvColumn, SummaryInk.Center(mid, 36), 36, iv >= s.Caps.IvMax ? Gold : ValueInk, align: SKTextAlign.Center);
+                    SummaryInk.Draw(c, ev.ToString(), EvColumn, SummaryInk.Center(mid, 36), 36, ValueInk, align: SKTextAlign.Center);
+                    GlowLine(c, PX0, right, y + 80);
+                    return 84;
+                });
+            }
+        }
+        else blocks.Add(Text("No stats recorded."));
+
+        var potential = new List<Block>();
+        if (s.HiddenPowerType is { } hp)
+            potential.Add(Row("Hidden Power", "", art: (canvas, x, cy) => TypePlates.Paint(canvas, new SKRect(x, cy - 24, x + 150, cy + 24), hp)));
+        if (s.TeraType is { } tera && TypeFacts.IsValid(tera))
+            potential.Add(Row("Tera Type", "", art: (canvas, x, cy) => TypePlates.Paint(canvas, new SKRect(x, cy - 24, x + 150, cy + 24), tera)));
+        else if (s.TeraTypeName is not null) potential.Add(Row("Tera Type", s.TeraTypeName));
+        if (s.Characteristic is not null) potential.Add(Row("Trait", s.Characteristic));
+        if (potential.Count > 0)
+        {
+            blocks.Add(Divider("Potential"));
+            blocks.AddRange(potential);
+        }
+        return blocks;
     }
 
-    private static float MovesPage(SKCanvas? c, MonSummary s, float w)
+    // ── Moves ────────────────────────────────────────────────────────────────
+
+    private static List<Block> MovesPage(MonSummary s)
     {
-        var accent = SummaryChrome.Accent(SummaryPage.Moves);
-        var rows = new List<Row>();
-        if (s.Moves.Count == 0) rows.Add(Note("No moves recorded."));
+        var blocks = new List<Block> { Divider("Moves") };
+        if (s.Moves.Count == 0) blocks.Add(Text("No moves recorded."));
         // Verdicts cover the four slots; the page lists only the filled ones, in slot order.
         var verdicts = s.MoveVerdicts?.Moves.Where(v => v.Move > 0).ToList() ?? [];
         for (var i = 0; i < s.Moves.Count; i++)
-            rows.Add(MoveRow(s.Moves[i], i < verdicts.Count && verdicts[i].Move == s.Moves[i].Id ? verdicts[i] : null));
-        var y = Section(c, 0, w, "Moves", accent, rows);
+            blocks.Add(MoveBlock(s.Moves[i], i < verdicts.Count && verdicts[i].Move == s.Moves[i].Id ? verdicts[i] : null));
         if (s.RelearnMoves.Count > 0)
         {
-            var relearn = new List<Row> { Text(string.Join(" · ", s.RelearnMoves), Pksm.Ink) };
+            blocks.Add(Divider("Relearnable"));
+            blocks.Add(Text(string.Join("\u00A0· ", s.RelearnMoves)));
             foreach (var bad in s.MoveVerdicts?.Relearn.Where(v => !v.Valid) ?? [])
-                relearn.Add(Text($"✗ Not legal · {bad.Reason}", Pksm.Illegal, 12.5f));
-            y = Section(c, y, w, "Relearnable", accent, relearn);
+                blocks.Add(Text($"Illegal · {bad.Reason}", Pksm.Illegal));
         }
         if (s.Fields?.TechRecordCount is { } records)
-            y = Section(c, y, w, "Technical Records", accent,
-                [records > 0 ? Text(string.Join(" · ", s.Fields.TechRecordNames), Pksm.Ink) : Text("No records learned.", Pksm.InkSoft)],
-                trailing: records > 0 ? $"{records} learned" : null);
-        return y;
+        {
+            blocks.Add(Divider("Technical Records"));
+            blocks.Add(records > 0 ? Text(string.Join("\u00A0· ", s.Fields.TechRecordNames)) : Text("No records learned.", SubInk));
+        }
+        return blocks;
     }
 
-    private static Row MoveRow(SummaryMove move, MoveVerdict? verdict) => (c, x, y, w) =>
+    /// <summary>One move: type and category plates, name, numbers and PP, its verdict, its effect.</summary>
+    private static Block MoveBlock(SummaryMove move, MoveVerdict? verdict) => (c, y, right) =>
     {
-        var effect = string.IsNullOrWhiteSpace(move.Effect) ? [] : SummaryInk.Wrap(move.Effect, 13f, w - 16);
-        var verdictHeight = verdict is null ? 0 : 18;
-        var height = 8 + 24 + 20 + verdictHeight + effect.Count * SummaryInk.Leading(13f) + 8;
+        var width = right - LabelX;
+        var verdictLines = verdict is null ? [] : SummaryInk.Wrap($"{(verdict.Valid ? "Legal" : "Illegal")} · {verdict.Reason}", 28, width);
+        var effect = string.IsNullOrWhiteSpace(move.Effect) ? [] : SummaryInk.Wrap(move.Effect, 28, width);
+        var height = 150 + 34 * (verdictLines.Count + effect.Count);
         if (c is null) return height;
-        var top = y + 8;
-        SummaryChrome.TypeBadge(c, new SKRect(x + 6, top + 2, x + 74, top + 22), move.Type);
-        InfoKit.CategoryIcon.DrawCategory(c, new SKRect(x + 80, top + 3, x + 108, top + 21), move.Category);
+        TypePlates.Paint(c, new SKRect(36, y + 18, 186, y + 66), move.Type);
+        CategoryPlate(c, new SKRect(198, y + 18, 298, y + 66), move.Category);
+        SummaryInk.Draw(c, SummaryInk.Fit(move.Name, 40, right - 316 - 8), 316, SummaryInk.Center(y + 42, 40), 40, Pksm.Ink);
         var low = move.MaxPP > 0 && move.PP * 4 <= move.MaxPP;
         var pp = move.PPUps > 0 ? $"PP {move.PP}/{move.MaxPP} +{move.PPUps}" : $"PP {move.PP}/{move.MaxPP}";
-        var ppWidth = SummaryInk.Draw(c, pp, x + w - 8, SummaryInk.Center(top + 12, 14), 14, low ? new SKColor(0xFF, 0x9A, 0x5A) : Pksm.Ink, align: SKTextAlign.Right);
-        SummaryInk.Draw(c, SummaryInk.Fit(move.Name, 15, w - 124 - ppWidth - 16, bold: true), x + 116, SummaryInk.Center(top + 12, 15), 15, Pksm.Ink, bold: true);
-        SummaryInk.Draw(c, $"{TypeFacts.CategoryName(move.Category)} · Power {InfoKit.Power(move.Power)} · Accuracy {InfoKit.Accuracy(move.Accuracy)}",
-            x + 8, SummaryInk.Center(top + 34, 12.5f), 12.5f, Pksm.InkSoft);
-        if (verdict is not null)
-            SummaryInk.Draw(c, SummaryInk.Fit(verdict.Valid ? $"✓ Legal · {verdict.Reason}" : $"✗ Not legal · {verdict.Reason}", 12.5f, w - 16),
-                x + 8, SummaryInk.Center(top + 52, 12.5f), 12.5f, verdict.Valid ? Pksm.Legal : Pksm.Illegal, bold: !verdict.Valid);
-        var ly = SummaryInk.Center(top + 44 + verdictHeight + SummaryInk.Leading(13f) / 2, 13f);
-        foreach (var line in effect) { SummaryInk.Draw(c, line, x + 8, ly, 13f, Pksm.Ink); ly += SummaryInk.Leading(13f); }
+        var ppWidth = SummaryInk.Draw(c, pp, right - 12, SummaryInk.Center(y + 100, 32), 32, low ? Orange : ValueInk, align: SKTextAlign.Right);
+        var numbers = $"Power {InfoKit.Power(move.Power)} · Accuracy {InfoKit.Accuracy(move.Accuracy)}";
+        SummaryInk.Draw(c, SummaryInk.Fit(numbers, 28, right - 12 - ppWidth - 24 - LabelX), LabelX, SummaryInk.Center(y + 100, 28), 28, SubInk);
+        var ly = y + 136;
+        foreach (var line in verdictLines)
+        {
+            SummaryInk.Draw(c, line, LabelX, SummaryInk.Center(ly, 28), 28, verdict!.Valid ? Pksm.Legal : Pksm.Illegal);
+            ly += 34;
+        }
+        foreach (var line in effect)
+        {
+            SummaryInk.Draw(c, line, LabelX, SummaryInk.Center(ly, 28), 28, ValueInk);
+            ly += 34;
+        }
+        GlowLine(c, PX0, right, y + height - 4);
         return height;
     };
 
-    private static float OriginPage(SKCanvas? c, MonSummary s, float w)
+    // ── Origin ───────────────────────────────────────────────────────────────
+
+    private static List<Block> OriginPage(MonSummary s)
     {
-        var accent = SummaryChrome.Accent(SummaryPage.Origin);
-        var origin = new List<Row>();
+        var blocks = new List<Block> { Divider("Origin") };
         if (s.Met is { } met)
         {
-            origin.Add(Fact("Game", met.VersionName.Length > 0 ? met.VersionName : "Unknown"));
+            blocks.Add(Row("Game", met.VersionName.Length > 0 ? met.VersionName : "Unknown"));
             if (met.WasEgg && met.EggLocationName.Length > 0)
-                origin.Add(Fact("Egg", met.EggLocationName, met.EggDate.Length > 0 ? $"Received {met.EggDate}" : null));
-            origin.Add(Fact(met.WasEgg ? "Hatched" : "Met", met.MetLocationName.Length > 0 ? met.MetLocationName : "—",
-                string.Join(" · ", new[]
+                blocks.Add(Row("Egg", met.EggLocationName, met.EggDate.Length > 0 ? $"Received {met.EggDate}" : null));
+            blocks.Add(Row(met.WasEgg ? "Hatched" : "Met", met.MetLocationName.Length > 0 ? met.MetLocationName : "—",
+                string.Join("  ·  ", new[]
                 {
-                    met.WasEgg ? null : met.MetLevel > 0 ? $"at Lv. {met.MetLevel}" : null,
+                    met.WasEgg ? null : met.MetLevel > 0 ? $"At Lv. {met.MetLevel}" : null,
                     met.MetDate.Length > 0 ? met.MetDate : null,
                 }.Where(x => x is not null))));
-            if (met.LanguageName.Length > 0) origin.Add(Fact("Language", met.LanguageName));
-            if (met.Fateful) origin.Add(Note("Fateful encounter: an event or gift Pokémon.", Pksm.Legal));
+            if (met.LanguageName.Length > 0) blocks.Add(Row("Language", met.LanguageName));
         }
-        else
-        {
-            origin.Add(Note("This game's met data isn't readable yet."));
-        }
-        origin.Add(Fact("Format", $"{s.Format.ToUpperInvariant()} · Generation {s.Generation}"));
+        else blocks.Add(Text("This game's met data isn't readable yet."));
+        blocks.Add(Row("Format", $"{s.Format.ToUpperInvariant()}  ·  Gen {s.Generation}"));
         if (s.Fields?.Pid is { } pid)
-            origin.Add(Fact("PID", pid.ToString("X8"), s.Fields.EncryptionConstant is { } ec ? $"Encryption constant {ec:X8}" : null));
-        var y = Section(c, 0, w, "Origin", accent, origin);
+            blocks.Add(Row("PID", pid.ToString("X8"), s.Fields.EncryptionConstant is { } ec ? $"Encryption constant {ec:X8}" : null));
+        if (s.Met is { Fateful: true }) blocks.Add(Text("Fateful encounter: an event or gift Pokémon.", Pksm.Legal));
 
-        var memories = new List<Row>();
-        if (s.Fields?.OtMemory is { } otMemory) memories.Add(Text(otMemory, Pksm.Ink));
-        if (s.Fields?.HandlerMemory is { } htMemory) memories.Add(Text(htMemory, Pksm.Ink));
-        if (memories.Count > 0) y = Section(c, y, w, "Memories", accent, memories);
-
-        var total = s.RibbonCount + s.MarkCount;
-        var ribbons = new List<Row>
+        var memories = new List<string>();
+        if (s.Fields?.OtMemory is { } otMemory) memories.Add(otMemory);
+        if (s.Fields?.HandlerMemory is { } htMemory) memories.Add(htMemory);
+        if (memories.Count > 0)
         {
-            total > 0 ? Text(string.Join("  ·  ", s.RibbonNames), Pksm.RibbonGold) : Text("No ribbons or marks yet.", Pksm.InkSoft),
+            blocks.Add(Divider("Memories"));
+            blocks.AddRange(memories.Select(m => Text(m)));
+        }
+
+        blocks.Add(Divider("Ribbons & marks"));
+        if (s.RibbonCount + s.MarkCount > 0)
+        {
+            // Non-breaking before each dot, so a wrapped line never starts with one.
+            blocks.Add(Text(string.Join("\u00A0· ", s.RibbonNames), Gold));
+            blocks.Add(Text($"{s.RibbonCount} ribbon(s)  ·  {s.MarkCount} mark(s)", SubInk));
+        }
+        else blocks.Add(Text("No ribbons or marks yet.", SubInk));
+        return blocks;
+    }
+
+    // ── Legality ─────────────────────────────────────────────────────────────
+
+    private List<Block> LegalityPage(MonSummary s)
+    {
+        if (_legalityPending) return [Hero("Checking…", ValueInk, "The legality analysis is running.")];
+        if (s.Legal is null)
+            return
+            [
+                Hero("Not checked", ValueInk, "No legality data for this game."),
+                Divider("Why"),
+                Text("Legality data only exists for the official games, so ROM hack Pokémon are neither legal nor illegal."),
+            ];
+
+        var checks = s.LegalityChecks;
+        var problems = checks?.Count(c => c.Judgement == LegalityJudgement.Invalid)
+            ?? s.LegalityLines.Count(l => !string.IsNullOrWhiteSpace(l));
+        var blocks = new List<Block>
+        {
+            s.Legal == true
+                ? Hero("Legal", Pksm.Legal, "Every check passed.")
+                : Hero("Illegal", Pksm.Illegal, problems == 1 ? "1 problem found." : $"{problems} problems found."),
+            Divider("Checks"),
         };
-        return Section(c, y, w, "Ribbons & marks", accent, ribbons,
-            trailing: total > 0 ? $"{s.RibbonCount} ribbon(s) · {s.MarkCount} mark(s)" : null);
+        if (checks is not null) blocks.AddRange(checks.Select(Check));
+        else blocks.AddRange(s.LegalityLines.Where(l => !string.IsNullOrWhiteSpace(l)).Select(l => Text(l)));
+        if (s.Legal == false)
+        {
+            blocks.Add(Divider("Fix it"));
+            blocks.Add(Text(FixHint));
+        }
+        return blocks;
     }
 
-    private float LegalityPage(SKCanvas? c, MonSummary s, float w)
+    /// <summary>One topic of the analysis: its dot, name and outcome, and why when it is not valid.</summary>
+    private static Block Check(LegalityCheck check) => (c, y, right) =>
     {
-        var (title, tone) = _legalityPending ? ("Checking legality…", Pksm.InkSoft)
-            : s.Legal switch
-            {
-                true => ("✓ Legal", Pksm.Legal),
-                false => ("✗ Not legal", Pksm.Illegal),
-                _ => ("Not checked", Pksm.InkSoft),
-            };
-        var rows = new List<Row> { Text(title, tone, 18) };
-        if (!_legalityPending && s.Legal is null)
-            rows.Add(Text("Offline legality analysis isn't available for this game.", Pksm.Ink));
-        foreach (var line in s.LegalityLines.Where(l => !string.IsNullOrWhiteSpace(l)))
-            rows.Add(Text(line, Pksm.Ink, 13f));
-        return Section(c, 0, w, "Legality", SummaryChrome.Accent(SummaryPage.Legality), rows);
-    }
-
-    // ── Drawing ──────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Final stats as the ORAS hexagon: HP on top, clockwise. The largest stat reaches the
-    /// outer ring so the build's shape reads at a glance; the numbers sit at each vertex.
-    /// </summary>
-    private static void PaintRadar(SKCanvas canvas, SKRect r, MonSummary s, SKColor accent)
-    {
-        var stats = s.Stats;
-        var cx = r.MidX;
-        var cy = r.MidY + 2;
-        var radius = Math.Min(r.Width, r.Height) * 0.29f;
-        var max = Math.Max(1, stats.Max());
-
-        SKPoint Vertex(int i, float rr)
+        var reasons = check.Judgement == LegalityJudgement.Valid ? [] : check.Reasons.SelectMany(r => SummaryInk.Wrap(r, 26, right - 82 - 10)).ToList();
+        var height = 76 + 36 * reasons.Count;
+        if (c is null) return height;
+        var (word, tone) = check.Judgement switch
         {
-            var angle = (float)(-Math.PI / 2 + i * Math.PI / 3);
-            return new SKPoint(cx + rr * (float)Math.Cos(angle), cy + rr * (float)Math.Sin(angle));
-        }
-        SKPath Hexagon(float rr)
-        {
-            var path = new SKPath();
-            for (var i = 0; i < 6; i++)
-            {
-                var p = Vertex(i, rr);
-                if (i == 0) path.MoveTo(p); else path.LineTo(p);
-            }
-            path.Close();
-            return path;
-        }
-
-        // The stage: a navy hexagon with a soft radial light, cobalt rings, the build in the page accent.
-        using (var outer = Hexagon(radius))
-        {
-            using var shader = SKShader.CreateRadialGradient(new SKPoint(cx, cy), radius,
-                [SummaryChrome.Lighter(Pksm.Paper, 0.1f), Pksm.PaperShade], SKShaderTileMode.Clamp);
-            using var stage = new SKPaint { IsAntialias = true, Shader = shader };
-            canvas.DrawPath(outer, stage);
-            using var rim = new SKPaint { Color = Pksm.PaperEdge, Style = SKPaintStyle.Stroke, StrokeWidth = 2, IsAntialias = true };
-            canvas.DrawPath(outer, rim);
-        }
-        using var grid = new SKPaint { Color = Pksm.PaperEdge.WithAlpha(0x90), Style = SKPaintStyle.Stroke, StrokeWidth = 1, IsAntialias = true };
-        for (var ring = 1; ring <= 3; ring++)
-        {
-            using var ringPath = Hexagon(radius * ring / 4f);
-            canvas.DrawPath(ringPath, grid);
-        }
-        for (var i = 0; i < 6; i++)
-            canvas.DrawLine(cx, cy, Vertex(i, radius).X, Vertex(i, radius).Y, grid);
-
-        using var shape = new SKPath();
-        for (var i = 0; i < 6; i++)
-        {
-            var p = Vertex(i, radius * Math.Max(0.06f, stats[i] / (float)max));
-            if (i == 0) shape.MoveTo(p); else shape.LineTo(p);
-        }
-        shape.Close();
-        using var fill = new SKPaint { Color = SummaryChrome.Lighter(accent, 0.25f).WithAlpha(0xB8), Style = SKPaintStyle.Fill, IsAntialias = true };
-        using var edge = new SKPaint { Color = SummaryChrome.Lighter(accent, 0.55f), Style = SKPaintStyle.Stroke, StrokeWidth = 1.6f, IsAntialias = true, StrokeJoin = SKStrokeJoin.Round };
-        canvas.DrawPath(shape, fill);
-        canvas.DrawPath(shape, edge);
-
-        for (var i = 0; i < 6; i++)
-        {
-            var label = Vertex(i, radius + 14);
-            var align = Math.Abs(label.X - cx) < 4 ? SKTextAlign.Center : label.X < cx ? SKTextAlign.Right : SKTextAlign.Left;
-            var capTone = s.NatureUp == i ? Raised : s.NatureDown == i ? Lowered : Pksm.InkSoft;
-            // Caption over value; the top vertex stacks upward, the bottom one downward.
-            var top = i == 0 ? label.Y - 12 : i == 3 ? label.Y + 4 : label.Y - 5;
-            SummaryInk.Draw(canvas, StatCaps[i], label.X, top, 12.5f, capTone, align: align);
-            SummaryInk.Draw(canvas, stats[i].ToString(), label.X, top + 15, 14.5f, Pksm.Ink, bold: true, align: align);
-        }
-    }
-
-    /// <summary>SKImage wrappers per bitmap: never copy a 512px render on every GIF tick.</summary>
-    private static readonly ConditionalWeakTable<SKBitmap, SKImage> Images = new();
-
-    private static SKImage ImageOf(SKBitmap bitmap)
-    {
-        if (Images.TryGetValue(bitmap, out var image)) return image;
-        // Decoded sprites are never written again: immutable lets the image share the pixels.
-        bitmap.SetImmutable();
-        image = SKImage.FromBitmap(bitmap);
-        Images.AddOrUpdate(bitmap, image);
-        return image;
-    }
-
-    private static readonly SKPaint StageFill = new() { IsAntialias = true };
-
-    /// <summary>The stage geometry in dp: the inner stage rect, the floor line and the sprite box.</summary>
-    private static (SKRect Stage, float Floor, SKRect Box) PortraitGeometry(float w, float h)
-    {
-        var panel = new SKRect(0, 0, w - ShadowInset, h - ShadowInset);
-        var stage = SKRect.Inflate(panel, -5, -5);
-        var size = Math.Max(1, Math.Min(stage.Width, stage.Height));
-        var floor = stage.MidY + size * 0.36f;
-        var box = size * 0.8f;
-        return (stage, floor, new SKRect(stage.MidX - box / 2, floor - box, stage.MidX + box / 2, floor));
-    }
-
-    /// <summary>Sizes the sprite layer to the sprite box only: a GIF tick uploads that, not the whole portrait.</summary>
-    private void PlaceSprite()
-    {
-        if (_portrait.Width <= 0 || _portrait.Height <= 0) return;
-        var (_, _, box) = PortraitGeometry((float)_portrait.Width, (float)_portrait.Height);
-        // A few dp of slack under the floor for pixel sprites' transparent margins.
-        _sprite.Margin = new Thickness(box.Left, box.Top, 0, 0);
-        _sprite.WidthRequest = box.Width;
-        _sprite.HeightRequest = box.Height + box.Height * 0.08f;
-    }
-
-    /// <summary>
-    /// The portrait stage: a device panel holding a soft 3DS light (cobalt falling to navy),
-    /// the floor shadow the mon stands on, and the ball in the corner. Repaints once per mon.
-    /// </summary>
-    private void PaintStage(object? sender, SKPaintSurfaceEventArgs args)
-    {
-        var canvas = args.Surface.Canvas;
-        var w = BeginDp(canvas, args.Info, _stage);
-        var h = args.Info.Height * (w / args.Info.Width);
-        var (stage, floorY, box) = PortraitGeometry(w, h);
-        SummaryChrome.Panel(canvas, new SKRect(0, 0, w - ShadowInset, h - ShadowInset));
-        using (var shader = SKShader.CreateLinearGradient(new SKPoint(0, stage.Top), new SKPoint(0, stage.Bottom),
-                   [SummaryChrome.Mix(Pksm.LogoGrid, Pksm.Paper, 0.3f), Pksm.Paper, Pksm.PaperShade], [0, 0.6f, 1], SKShaderTileMode.Clamp))
-        {
-            StageFill.Shader = shader;
-            canvas.DrawRoundRect(stage, 3, 3, StageFill);
-            StageFill.Shader = null;
-        }
-        if (_summary is not { } s) return;
-        using (var floor = SKShader.CreateRadialGradient(new SKPoint(0, 0), 1, [Pksm.LogoVoid.WithAlpha(0x80), Pksm.LogoVoid.WithAlpha(0)], SKShaderTileMode.Clamp))
-        {
-            canvas.Save();
-            canvas.Translate(stage.MidX, floorY);
-            canvas.Scale(box.Width * 0.42f, box.Width * 0.075f);
-            StageFill.Shader = floor;
-            canvas.DrawCircle(0, 0, 1, StageFill);
-            StageFill.Shader = null;
-            canvas.Restore();
-        }
-        var ball = _sprites.GetBall(s.Ball);
-        if (ball is null)
-        {
-            _sprites.WarmBall(s.Ball, () => MainThread.BeginInvokeOnMainThread(_stage.InvalidateSurface));
-            return;
-        }
-        var ballSize = Math.Clamp(Math.Min(stage.Width, stage.Height) * 0.13f, 18, 30);
-        canvas.DrawImage(ImageOf(ball), new SKRect(stage.Left + 6, stage.Top + 6, stage.Left + 6 + ballSize, stage.Top + 6 + ballSize),
-            new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
-    }
-
-    /// <summary>
-    /// The mon on its stage: animated Showdown sprite → HOME render → pixel sprite, feet on
-    /// the floor. While animation availability is still unknown nothing is drawn: a calm
-    /// empty beat beats a 2D sprite flashing into a GIF. Animated sprites paint at dp
-    /// resolution (they are low-res art anyway), which keeps a GIF tick cheap.
-    /// </summary>
-    private void PaintSprite(object? sender, SKPaintSurfaceEventArgs args)
-    {
-        var canvas = args.Surface.Canvas;
-        var w = BeginDp(canvas, args.Info, _sprite);
-        var h = args.Info.Height * (w / args.Info.Width);
-        _spriteAnimated = false;
-        if (_summary is not { } s) return;
-        void Redraw() => MainThread.BeginInvokeOnMainThread(_sprite.InvalidateSurface);
-        var floorY = w; // the box is square; the extra height hangs under the floor
-        if (s.IsEgg)
-        {
-            // No egg art ships with the sprite set: a plain speckled egg keeps the species a surprise.
-            var eh = w * 0.62f;
-            var egg = new SKRect(w / 2 - eh * 0.38f, floorY - eh, w / 2 + eh * 0.38f, floorY);
-            using var shell = new SKPaint { Color = new SKColor(0xF4, 0xEE, 0xD8), IsAntialias = true };
-            using var spot = new SKPaint { Color = new SKColor(0x7F, 0xC4, 0x6A), IsAntialias = true };
-            canvas.DrawOval(egg, shell);
-            canvas.DrawCircle(egg.MidX - eh * 0.12f, egg.MidY - eh * 0.12f, eh * 0.08f, spot);
-            canvas.DrawCircle(egg.MidX + eh * 0.14f, egg.MidY + eh * 0.08f, eh * 0.1f, spot);
-            return;
-        }
-        // One look, one fallback order (SpriteCatalog): animated Showdown for the exact form →
-        // HOME render for the exact form → bundled pixel sprite / artwork. A source without
-        // art for this form answers "none" at once rather than showing the base form.
-        var look = s.Look;
-        if (!_sprites.TryGetShowdown(look, out var animated))
-        {
-            _sprites.WarmShowdown(look, Redraw);
-            return;
-        }
-        _spriteAnimated = animated is not null;
-        if (_sprite.IgnorePixelScaling != _spriteAnimated)
-        {
-            // Switching resolution re-sizes the surface; it repaints itself right after.
-            _sprite.IgnorePixelScaling = _spriteAnimated;
-            Redraw();
-            return;
-        }
-        var home = animated is null ? _sprites.GetHome(look) : null;
-        if (animated is null && home is null) _sprites.WarmHome(look, Redraw);
-        // While a HOME render is on its way, a pixel stand-in would only flash before it.
-        if (animated is null && home is null && !_sprites.HomeUnavailable(look)) return;
-        var bitmap = animated?.FrameAt(_elapsedMs) ?? home ?? _sprites.GetSprite(look);
-        if (bitmap is null)
-        {
-            _sprites.Warm(look, Redraw);
-            return;
-        }
-        var smooth = home is not null;
-        var fit = w * (animated is not null ? 0.9f : 1f);
-        var scale = Math.Min(fit / bitmap.Width, fit / bitmap.Height);
-        var bw = bitmap.Width * scale;
-        var bh = bitmap.Height * scale;
-        // Feet on the floor: pixel sprites carry transparent margins, so they sit a touch lower.
-        var bottom = Math.Min(h, floorY + (smooth ? 0 : bh * 0.06f));
-        var dest = new SKRect(w / 2 - bw / 2, bottom - bh, w / 2 + bw / 2, bottom);
-        canvas.DrawImage(ImageOf(bitmap), dest, smooth || animated is not null
-            ? new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None)
-            : new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
-    }
-
-    /// <summary>The GIF loop only ticks while this view is on screen with a mon to show.</summary>
-    private void UpdateTimer()
-    {
-        if (_summary is null || !IsLoaded) { StopTimer(); return; }
-        if (_timer is not null) return;
-        _timer = Dispatcher.CreateTimer();
-        _timer.Interval = TimeSpan.FromMilliseconds(40);
-        _timer.Tick += (_, _) =>
-        {
-            _elapsedMs += 40;
-            if (_spriteAnimated && _hero.IsVisible) _sprite.InvalidateSurface();
+            LegalityJudgement.Invalid => ("Invalid", Pksm.Illegal),
+            LegalityJudgement.Fishy => ("Fishy", Orange),
+            _ => ("Valid", Pksm.Legal),
         };
-        _timer.Start();
+        using (var dot = new SKPaint { Color = tone, IsAntialias = true }) c.DrawCircle(53, y + 39, 11, dot);
+        SummaryInk.Draw(c, check.Name, 82, SummaryInk.Center(y + 38, 36), 36, check.Judgement == LegalityJudgement.Valid ? ValueInk : Pksm.Ink);
+        SummaryInk.Draw(c, word, right - 12, SummaryInk.Center(y + 38, 32), 32, tone, align: SKTextAlign.Right);
+        for (var i = 0; i < reasons.Count; i++)
+            SummaryInk.Draw(c, reasons[i], 82, SummaryInk.Center(y + 76 + 36 * i, 26), 26, check.Judgement == LegalityJudgement.Invalid ? ReasonInk : SubInk);
+        GlowLine(c, PX0, right, y + height - 4);
+        return height;
+    };
+
+    // ── Plates and shapes ────────────────────────────────────────────────────
+
+    // The category plates share one blue, the app's own, so they never read as a type.
+    private static SKColor CategoryLight => ColorTheme.Current.ToolEdge;
+    private static SKColor CategoryDark => ColorTheme.Current.CategoryDark;
+
+    private static void CategoryPlate(SKCanvas c, SKRect r, MoveCategory category)
+    {
+        var label = category switch
+        {
+            MoveCategory.Physical => "PHYS",
+            MoveCategory.Special => "SPEC",
+            _ => "STAT",
+        };
+        TypePlates.Paint(c, r, CategoryLight, CategoryDark, label);
     }
 
-    private void StopTimer()
+    /// <summary>A tab: rounded on the left, its right edge slanting out toward the bottom.</summary>
+    private static SKPath Tab(SKRect r, float radius, float slant)
     {
-        StopFling();
-        _timer?.Stop();
-        _timer = null;
+        var path = new SKPath();
+        path.MoveTo(r.Left + radius, r.Top);
+        path.LineTo(r.Right - slant, r.Top);
+        path.LineTo(r.Right, r.Bottom);
+        path.LineTo(r.Left + radius, r.Bottom);
+        if (radius > 0)
+        {
+            path.ArcTo(new SKRect(r.Left, r.Bottom - 2 * radius, r.Left + 2 * radius, r.Bottom), 90, 90, false);
+            path.LineTo(r.Left, r.Top + radius);
+            path.ArcTo(new SKRect(r.Left, r.Top, r.Left + 2 * radius, r.Top + 2 * radius), 180, 90, false);
+        }
+        else path.LineTo(r.Left, r.Top);
+        path.Close();
+        return path;
+    }
+
+    /// <summary>A parallelogram leaning right: the tab strip and the active tab.</summary>
+    private static SKPath Parallelogram(SKRect r, float slant)
+    {
+        var path = new SKPath();
+        path.MoveTo(r.Left + slant, r.Top);
+        path.LineTo(r.Right, r.Top);
+        path.LineTo(r.Right - slant, r.Bottom);
+        path.LineTo(r.Left, r.Bottom);
+        path.Close();
+        return path;
+    }
+
+    private static void Fill(SKCanvas c, SKPath path, SKColor top, SKColor bottom)
+    {
+        var bounds = path.Bounds;
+        using var shader = SKShader.CreateLinearGradient(new SKPoint(0, bounds.Top), new SKPoint(0, bounds.Bottom), [top, bottom], SKShaderTileMode.Clamp);
+        using var paint = new SKPaint { Shader = shader, IsAntialias = true };
+        c.DrawPath(path, paint);
+    }
+
+    private static void Outline(SKCanvas c, SKPath path, SKColor color, float width)
+    {
+        // Inside the shape only, as the mockup's inset outline.
+        c.Save();
+        c.ClipPath(path, antialias: true);
+        using var paint = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = width * 2, StrokeJoin = SKStrokeJoin.Miter };
+        c.DrawPath(path, paint);
+        c.Restore();
     }
 }

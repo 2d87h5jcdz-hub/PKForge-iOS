@@ -493,12 +493,9 @@ public sealed class LivingDexExecutor(
                 progress?.Report(new LivingDexProgress(LivingDexPhase.Writing, done, total, "Filling the Bank's living dex boxes…", SaveId: LivingDexPlanner.BankId));
                 ArrangeBank(staging);
                 bankArranged = staging.BankArranges.Count > 0;
-                foreach (var add in staging.BankAdds)
-                {
-                    var entry = bank!.Add(add.Data, add.Info);
-                    bankAdded.Add(entry.Id);
-                    bank.Move(entry.Id, add.Slot.Box, add.Slot.Slot);
-                }
+                // One index write lands every add in its planned slot, or none of them.
+                bankAdded.AddRange(bank!.AddMany([.. staging.BankAdds.Select(add => new BankDeposit(add.Data, add.Info, add.Slot.Box, add.Slot.Slot))])
+                    .Select(entry => entry.Id));
                 done++;
             }
 

@@ -132,7 +132,8 @@ public sealed class BankArchiveTests : IDisposable
     [Fact]
     public void PkFileNamePrefilterMatchesLooseEntityExtensions()
     {
-        foreach (var name in new[] { "mon.pk", "mon.PK", "mon.pk1", "mon.Pk9", "025 - Sparky ab12cd34.pk7" })
+        foreach (var name in new[] { "mon.pk", "mon.PK", "mon.pk1", "mon.Pk9", "025 - Sparky ab12cd34.pk7",
+                     "1024 - Terapagos ab12cd34.pk3rr", "mon.PK3UB", "mon.pk3gsc" })
             Assert.True(BankArchive.IsPkFileName(name), name);
         foreach (var name in new[] { "manifest.json", "mon.txt", "mon.pk10", "mon.ek7", "mon", "mon.pkx" })
             Assert.False(BankArchive.IsPkFileName(name), name);

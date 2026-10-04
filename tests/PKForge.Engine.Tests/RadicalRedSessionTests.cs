@@ -209,16 +209,15 @@ public sealed class RadicalRedSessionTests
     }
 
     [Fact]
-    public void ExportAndImportRoundTripThroughPk3()
+    public void ExportAndImportRoundTripThroughTheBankFormat()
     {
         using var session = OpenGroundTruth();
         if (session is null) return;
         var export = session.ExportSlot(0, 0);
-        Assert.EndsWith(".pk3", export.FileName);
-
+        Assert.EndsWith(".pk3rr", export.FileName);
 
         Assert.False(session.ImportSlot(2, 29, new byte[8])); // garbage never imports
-        Assert.True(session.ImportSlot(2, 29, export.Data));
+        Assert.True(session.ImportSlot(2, 29, export.Data, export.Format));
         var imported = session.ReadEntity(2, 29);
         Assert.Equal(281, imported.Species);
         Assert.Equal("Kirlia", imported.Nickname);
@@ -252,6 +251,7 @@ public sealed class RadicalRedSessionTests
         Assert.Equal(70, generated.Level);
         using var reopened = new RadicalRedEngineSession(session.Serialize());
         Assert.Equal(150, reopened.ReadEntity(7, 1).Species);
+        Assert.Equal("Mewtwo", reopened.ReadEntity(7, 1).Nickname); // named like a caught one
     }
 
     [Fact]

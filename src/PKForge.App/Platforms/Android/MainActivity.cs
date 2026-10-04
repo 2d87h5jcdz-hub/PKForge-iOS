@@ -14,7 +14,8 @@ namespace PKForge.App;
 [Activity(Theme = "@style/Maui.SplashTheme", MainLauncher = true,
     Icon = "@mipmap/pkforge", RoundIcon = "@mipmap/pkforge_round",
     ScreenOrientation = ScreenOrientation.SensorLandscape,
-    ConfigurationChanges = ConfigChanges.ScreenSize | ConfigChanges.Orientation | ConfigChanges.UiMode | ConfigChanges.ScreenLayout | ConfigChanges.SmallestScreenSize | ConfigChanges.Density)]
+    ConfigurationChanges = ConfigChanges.ScreenSize | ConfigChanges.Orientation | ConfigChanges.UiMode | ConfigChanges.ScreenLayout | ConfigChanges.SmallestScreenSize | ConfigChanges.Density
+        | ConfigChanges.Keyboard | ConfigChanges.KeyboardHidden | ConfigChanges.Navigation)]
 public sealed class MainActivity : MauiAppCompatActivity
 {
     private const string MovedToMainScreen = "pkforge.moved-to-main-screen";
@@ -75,6 +76,20 @@ public sealed class MainActivity : MauiAppCompatActivity
         base.OnResume();
         OpenPokeparkFromIntent();
         SecondaryDisplayHost()?.ResumeAfterActivityPause();
+    }
+
+    /// <summary>
+    /// Pairing or unplugging a controller changes the keyboard and navigation configuration.
+    /// The activity is kept (see ConfigurationChanges): recreating it tore down the MAUI window
+    /// under pages still loading images, and dropped the lower screen. A pad that goes away
+    /// mid-hold never sends its key-up, so its repeat stops here.
+    /// </summary>
+    public override void OnConfigurationChanged(Android.Content.Res.Configuration newConfig)
+    {
+        base.OnConfigurationChanged(newConfig);
+        StopHatRepeat();
+        StopKeyRepeat();
+        _hatDirection = null;
     }
 
     protected override void OnNewIntent(Intent? intent)
@@ -398,12 +413,16 @@ public sealed class AndroidSecondaryDisplayHost(IServiceProvider services) : ISe
         cancellationToken.ThrowIfCancellationRequested();
         Dismiss();
         _resumeAfterActivityPause = false;
+        StopWaitingForDisplay();
         return ValueTask.CompletedTask;
     }
 
     internal void SuspendForActivityPause()
     {
-        _resumeAfterActivityPause |= _presentation?.IsShowing == true;
+        // Not IsShowing: going to sleep turns the lower display off, and Android may already
+        // have dismissed the Presentation by the time the activity pauses.
+        _resumeAfterActivityPause |= _presentation is not null;
+        StopWaitingForDisplay();
         Dismiss();
     }
 
@@ -411,10 +430,43 @@ public sealed class AndroidSecondaryDisplayHost(IServiceProvider services) : ISe
     {
         if (!_resumeAfterActivityPause)
             return;
+        if (ResolveDisplay() is null)
+        {
+            // Waking from sleep resumes the activity before the lower display is back on:
+            // wait for it instead of giving the lower screen up.
+            WaitForDisplay();
+            return;
+        }
 
         _resumeAfterActivityPause = false;
+        StopWaitingForDisplay();
         try { _ = ShowAsync(); }
         catch { /* A removed or unavailable secondary display must not break resume. */ }
+    }
+
+    private DisplayWaiter? _displayWaiter;
+
+    private void WaitForDisplay()
+    {
+        if (_displayWaiter is not null) return;
+        if (Platform.AppContext.GetSystemService(Android.Content.Context.DisplayService) is not DisplayManager manager) return;
+        _displayWaiter = new DisplayWaiter(manager, ResumeAfterActivityPause);
+        manager.RegisterDisplayListener(_displayWaiter, new Handler(Looper.MainLooper!));
+    }
+
+    private void StopWaitingForDisplay()
+    {
+        if (_displayWaiter is null) return;
+        _displayWaiter.Manager.UnregisterDisplayListener(_displayWaiter);
+        _displayWaiter = null;
+    }
+
+    private sealed class DisplayWaiter(DisplayManager manager, Action retry) : Java.Lang.Object, DisplayManager.IDisplayListener
+    {
+        public DisplayManager Manager => manager;
+        public void OnDisplayAdded(int displayId) => retry();
+        public void OnDisplayChanged(int displayId) => retry();
+        public void OnDisplayRemoved(int displayId) { }
     }
 
     private void Dismiss()

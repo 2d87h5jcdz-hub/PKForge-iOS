@@ -52,13 +52,16 @@ public static class MonFieldsEditor
             if (argument is not null)
                 Add("arg", new PadOption($"{argument.Label} · {ArgumentValue(argument)}", IconPath: "evolve"));
             if (mint is { } statNature)
-                Add("mint", new PadOption($"Stat nature (mint) · {NameOf(data.NatureNames, statNature)}", IconPath: "stats"));
+                Add("mint", new PadOption($"Stat nature (mint) · {NameOf(data.NatureNames, statNature)}", IconPath: "stats",
+                    Detail: "The nature its stats follow; its real nature stays the same."));
             if (shiny is not null)
             {
                 Add("shiny", new PadOption($"Shiny · {ShinyLabel(shiny)}", IconPath: "shiny"));
-                Add("pid", new PadOption($"PID · {Hex(shiny.Pid)}", IconPath: "hex"));
+                Add("pid", new PadOption($"PID · {Hex(shiny.Pid)}", IconPath: "hex",
+                    Detail: "Its personality value, which decides whether it is shiny."));
                 if (shiny.EncryptionConstant is { } ec)
-                    Add("ec", new PadOption($"Encryption constant · {Hex(ec)}", IconPath: "hex"));
+                    Add("ec", new PadOption($"Encryption constant · {Hex(ec)}", IconPath: "hex",
+                        Detail: "A hidden number the game uses to encrypt its data."));
             }
             if (options.Count == 0)
             {
@@ -215,18 +218,20 @@ public static class MonFieldsEditor
             var options = new List<PadOption>();
             var keys = new Dictionary<string, string>();
             void Add(string key, PadOption option) { options.Add(option); keys[option.Label] = key; }
-            if (t.OtGender is { } otGender) Add("otg", new PadOption($"OT gender · {Gender(otGender)}", IconPath: "profile"));
+            if (t.OtGender is { } otGender) Add("otg", new PadOption($"OT gender · {Gender(otGender)}", IconPath: "profile", Detail: "The gender of its original trainer."));
             if (t.HasHandler)
             {
-                Add("otf", new PadOption($"OT friendship · {t.OtFriendship}", IconPath: "heart"));
-                Add("htn", new PadOption($"Handler · {(named ? t.HandlerName : "none")}", IconPath: "profile"));
+                Add("otf", new PadOption($"OT friendship · {t.OtFriendship}", IconPath: "heart", Detail: "Friendship toward its original trainer."));
+                Add("htn", new PadOption($"Handler · {(named ? t.HandlerName : "none")}", IconPath: "profile",
+                    Detail: "The last trainer it was traded to; empty means never traded."));
                 if (named)
                 {
                     Add("htg", new PadOption($"Handler gender · {Gender(t.HandlerGender)}", IconPath: "gender"));
                     if (t.HandlerLanguage is { } language)
                         Add("htl", new PadOption($"Handler language · {languages.FirstOrDefault(l => l.Id == language)?.Name ?? "None"}", IconPath: "rename"));
-                    Add("htf", new PadOption($"Handler friendship · {t.HandlerFriendship}", IconPath: "heart"));
-                    Add("cur", new PadOption($"Now with · {(t.CurrentHandler == 1 ? t.HandlerName : "its OT")}", IconPath: "link"));
+                    Add("htf", new PadOption($"Handler friendship · {t.HandlerFriendship}", IconPath: "heart", Detail: "Friendship toward the trainer it was traded to."));
+                    Add("cur", new PadOption($"Now with · {(t.CurrentHandler == 1 ? t.HandlerName : "its OT")}", IconPath: "link",
+                        Detail: "Who has it now; friendship and memories follow that trainer."));
                 }
             }
             if (otMemory is not null) Add("otm", new PadOption("OT memory", IconPath: "info", Detail: otMemory.Editable ? otMemory.Text : otMemory.Reason));

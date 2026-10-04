@@ -207,8 +207,8 @@ docs/                       architecture, bank model, development, art direction
 
 - [PKHeX](https://github.com/kwsch/PKHeX) by Kaphotics and every contributor over the
   years, the engine everything runs on
-- [spritedmistery](https://www.instagram.com/spritedmistery/), the PKForge logo and several
-  of the app's assets
+- [spritedmistery](https://www.instagram.com/spritedmistery/), the PKForge logo, the app's
+  look, its color schemes and logos, and its buttons
 - [PKHeX-Plugins / Auto Legality Mod](https://github.com/santacrab2/PKHeX-Plugins), the
   offline legalizer built into the app
 - [PKSM](https://github.com/FlagBrew/PKSM), the pixel chrome this UI builds on (GPL-3,
@@ -216,6 +216,9 @@ docs/                       architecture, bank model, development, art direction
 - [SteamGridDB](https://www.steamgriddb.com), cartridge icons, second-screen logos, and
   hero banners for the game library (community submissions; see
   [game art attribution](src/PKForge.App/Resources/GameArt/ATTRIBUTION.md))
+- [Pokémon Showdown](https://pokemonshowdown.com) by [Smogon](https://www.smogon.com) and
+  the artists of its sprite projects, front sprites and box icons, used with permission (see
+  [Showdown attribution](src/PKForge.App/Resources/Showdown/ATTRIBUTION.md))
 - [PokeAPI](https://pokeapi.co), item art fetched at runtime and cached on device
 - [game-icons.net](https://game-icons.net) (CC-BY 3.0, © Lorc, Delapouite, Guard13007,
   Carl Olsen and other contributing artists), UI symbols

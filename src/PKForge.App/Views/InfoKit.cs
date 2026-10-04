@@ -24,27 +24,18 @@ public static class InfoKit
 
     private static Color TypeInk(int type) => type == TypeFacts.Stellar ? Colors.White : TypePalette.ForegroundForType(type);
 
-    /// <summary>A fixed-width type pill ("FIRE") so badge columns line up down a list.</summary>
+    /// <summary>A fixed-width type plate ("FIRE", see <see cref="TypePlates"/>) so badge columns line up down a list.</summary>
     public static Border TypeBadge(int? type = null, double width = 60)
     {
-        // The games' rectangular type plate: solid fill, square corners, pixel caps, no outline.
-        var label = new Label
-        {
-            FontFamily = DsChrome.PixelFont,
-            FontSize = UiTokens.TextSmall,
-            HorizontalTextAlignment = TextAlignment.Center,
-            VerticalTextAlignment = TextAlignment.Center,
-            LineBreakMode = LineBreakMode.NoWrap,
-        };
         var badge = new Border
         {
             WidthRequest = width,
-            HeightRequest = 20,
-            StrokeThickness = 1,
-            StrokeShape = new RoundRectangle { CornerRadius = 3 },
-            Padding = new Thickness(2, 0),
+            HeightRequest = Math.Round(width / 3.1),
+            StrokeThickness = 0,
+            BackgroundColor = Colors.Transparent,
+            Padding = 0,
             VerticalOptions = LayoutOptions.Center,
-            Content = label,
+            Content = new TypePlates.View(),
             InputTransparent = true,
         };
         SetType(badge, type);
@@ -54,19 +45,8 @@ public static class InfoKit
     /// <summary>Re-points a badge made by <see cref="TypeBadge"/> (recycled list rows); null hides it.</summary>
     public static void SetType(Border badge, int? type)
     {
-        badge.IsVisible = type is { } t && TypeFacts.IsValid(t);
-        if (type is not { } value || !badge.IsVisible) return;
-        // The summary's type plate: the type colour with a gentle top light and a darker 1 dp edge.
-        var fill = TypeColor(value);
-        badge.Background = new LinearGradientBrush(
-            [new GradientStop(fill.WithLuminosity(Math.Min(1, fill.GetLuminosity() + 0.06f)), 0f), new GradientStop(fill.WithLuminosity(Math.Max(0, fill.GetLuminosity() - 0.04f)), 1f)],
-            new Point(0, 0), new Point(0, 1));
-        badge.Stroke = fill.WithLuminosity(Math.Max(0, fill.GetLuminosity() - 0.2f));
-        if (badge.Content is Label label)
-        {
-            label.Text = TypeFacts.Name(value).ToUpperInvariant();
-            label.TextColor = TypeInk(value);
-        }
+        badge.IsVisible = type is { } t && (TypeFacts.IsValid(t) || t == TypeFacts.Stellar);
+        if (badge.Content is TypePlates.View plate) plate.Type = badge.IsVisible ? type : null;
     }
 
     /// <summary>One or two type badges side by side (a species' typing).</summary>

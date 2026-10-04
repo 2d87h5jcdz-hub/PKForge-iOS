@@ -90,7 +90,8 @@ public sealed class SafeSaveWriterTests
         public int CreatedOrder { get; private set; } = -1;
         public string? LastDescription { get; private set; }
 
-        public ValueTask<BackupReceipt> CreateAsync(SaveSnapshot source, string? changeDescription = null, CancellationToken cancellationToken = default)
+        public ValueTask<BackupReceipt> CreateAsync(SaveSnapshot source, string? changeDescription = null, string? documentId = null,
+            CancellationToken cancellationToken = default)
         {
             Calls++;
             LastDescription = changeDescription;

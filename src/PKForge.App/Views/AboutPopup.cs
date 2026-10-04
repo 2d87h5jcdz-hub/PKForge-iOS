@@ -1,3 +1,4 @@
+using PKForge.App.Services;
 using PKForge.App.Theme;
 
 namespace PKForge.App.Views;
@@ -8,7 +9,6 @@ namespace PKForge.App.Views;
 /// </summary>
 public static class AboutPopup
 {
-    private static byte[]? _logoPng;
 
     public static Task ShowAsync(Grid host)
     {
@@ -71,7 +71,7 @@ public static class AboutPopup
                 Small("Pokémon save manager and bank"),
                 Row("Version", diagnostic ? $"v{version} · diagnostic" : $"v{version}"),
                 Row("Developed by", "@22sh"),
-                Row("Logo by", "@spritedmistery"),
+                Row("Design by", "@spritedmistery"),
                 Small("Engine PKHeX · chrome PKSM (GPL-3)"),
                 Small("Sprites © Nintendo · Creatures · Game Freak"),
                 Small("github.com/sofianeelhor/pkforge", UiTokens.MenuBlue),
@@ -79,7 +79,7 @@ public static class AboutPopup
             },
         };
 
-        var source = LogoSource();
+        var source = ThemeLogo.Source();
         if (source is not null)
         {
             content.Children.Insert(1, new Image
@@ -94,28 +94,24 @@ public static class AboutPopup
 
         var window = Kit.OverlayWindow(host, content, preferredMaxWidth: 420);
         overlay = Kit.AttachOverlay(host, window, () => Close());
-        pad = new PadOverlay(() => Close(), () => Close());
-        return result.Task;
-    }
-
-    /// <summary>The bundled logo (Resources/AppIcon/pkforge.png, shipped as ui/logo.png).</summary>
-    private static ImageSource? LogoSource()
-    {
-        if (_logoPng is null)
+        // ↑↑↓↓←→←→ B A plays the easter egg. B and A keep closing the window unless they
+        // finish the code.
+        PadButton[] konami = [PadButton.Up, PadButton.Up, PadButton.Down, PadButton.Down,
+            PadButton.Left, PadButton.Right, PadButton.Left, PadButton.Right, PadButton.B, PadButton.A];
+        var entered = 0;
+        bool Konami(PadButton button)
         {
-            try
+            if (button == konami[entered]) entered++;
+            else entered = button != PadButton.Up ? 0 : entered == 2 ? 2 : 1; // ↑↑↑ still has ↑↑
+            if (entered == konami.Length)
             {
-                using var stream = FileSystem.OpenAppPackageFileAsync("ui/logo.png").GetAwaiter().GetResult();
-                using var copy = new MemoryStream();
-                stream.CopyTo(copy);
-                _logoPng = copy.ToArray();
+                entered = 0;
+                _ = BadAppleEgg.PlayAsync(host);
+                return true;
             }
-            catch
-            {
-                return null; // the panel works without art; never block About on assets
-            }
+            return entered >= konami.Length - 1; // the code's B: it does not close
         }
-        var png = _logoPng;
-        return ImageSource.FromStream(() => new MemoryStream(png));
+        pad = new PadOverlay(() => Close(), () => Close(), Konami);
+        return result.Task;
     }
 }

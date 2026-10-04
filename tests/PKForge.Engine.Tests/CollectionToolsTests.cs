@@ -39,6 +39,28 @@ public sealed class CollectionToolsTests
     }
 
     [Fact]
+    public void ReportsGroupTheChecksByTopic()
+    {
+        using var session = new SaveEngineSession(File.ReadAllBytes(CorpusPath("SM Project 802.main")));
+        session.ApplyEdit(-1, 0, new EntityEdit(Ball: 999));
+
+        var report = new LegalityService().Analyze(session, -1, 0);
+
+        Assert.False(report.Valid);
+        Assert.NotNull(report.Checks);
+        // The main topics are always listed, in order; the broken ball is the one that fails.
+        Assert.Equal(["Encounter", "PID / IVs", "Moves", "Ability", "Ball", "Ribbons", "Trainer", "Nickname"],
+            report.Checks.Take(8).Select(c => c.Name));
+        var ball = Assert.Single(report.Checks, c => c.Name == "Ball");
+        Assert.Equal(LegalityJudgement.Invalid, ball.Judgement);
+        Assert.NotEmpty(ball.Reasons);
+        Assert.DoesNotContain(ball.Reasons, reason => reason.StartsWith("Invalid:", StringComparison.Ordinal));
+        // The sweep carries the same checks.
+        var swept = new LegalityService().Sweep(session).Single(v => v.Box == -1 && v.Slot == 0);
+        Assert.Equal(LegalityJudgement.Invalid, swept.Checks!.Single(c => c.Name == "Ball").Judgement);
+    }
+
+    [Fact]
     public void LegalizeSlotsRepairsEveryFlaggedSlotInOneCall()
     {
         using var session = new SaveEngineSession(File.ReadAllBytes(CorpusPath("SM Project 802.main")));

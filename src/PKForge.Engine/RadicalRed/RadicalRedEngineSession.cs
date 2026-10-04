@@ -9,7 +9,7 @@ namespace PKForge.Engine.RadicalRed;
 internal sealed class RadicalRedEngineSession : CfruEngineSession
 {
     public static readonly CfruGameProfile Profile = new(
-        "Radical Red", "RADICALRED", RadicalRedGameData.Instance, [],
+        "Radical Red", "RADICALRED", CfruEntity.RadicalRed, RadicalRedGameData.Instance, [],
         bytes => RadicalRedFormat.IsRadicalRed(bytes.Span));
 
     public RadicalRedEngineSession(ReadOnlyMemory<byte> bytes, string? displayName = null)

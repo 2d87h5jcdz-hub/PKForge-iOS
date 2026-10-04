@@ -1,4 +1,5 @@
 using PKForge.Domain;
+using PKForge.Engine.RadicalRed;
 using PKHeX.Core;
 
 namespace PKForge.Engine;
@@ -64,28 +65,37 @@ public sealed class TransferPreviewService
         ArgumentNullException.ThrowIfNull(scratch);
         ArgumentNullException.ThrowIfNull(entityBytes);
 
-        var context = scratch is SaveEngineSession engine ? engine.GetEntity(box, slot).Context : EntityContext.None;
-        var before = EntityBytes.Parse(entityBytes, format, context);
-        if (before is null || before.Species == 0)
-            return null;
         // Romhack engine sessions cannot hand back the landed entity, so the diff is
-        // honestly unavailable for them; the transfer itself is unaffected.
+        // honestly unavailable for them; the transfer itself is unaffected. Their import
+        // is the only judge of the bytes: a CFRU mon going home has no PKHeX reading.
         if (scratch is not SaveEngineSession session)
         {
             if (!scratch.ImportSlot(box, slot, entityBytes, format))
                 return null;
+            var own = EntityBytes.Normalize(format) is { } normalized
+                && (scratch is CfruEngineSession cfru ? cfru.EntityFormat == normalized
+                    : scratch is Unbound.UnboundEngineSession && normalized == CfruEntity.Unbound);
             return new TransferPreview(
-                ["Conversion details are not available for this game's engine; the transfer itself is unchanged."],
+                [own
+                    ? "It goes back into its own game exactly as it was stored."
+                    : "Conversion details are not available for this game's engine; the transfer itself is unchanged."],
                 TransferLegality.Unknown,
                 ["This game has no offline legality analysis."]);
         }
 
+        var before = EntityBytes.Parse(entityBytes, format, session.GetEntity(box, slot).Context);
+        if (before is null || before.Species == 0)
+            return null;
         var conversion = session.ImportSlotWithReport(box, slot, entityBytes, out _, format);
         if (conversion is null)
             return null;
         var after = session.GetEntity(box, slot);
         var legality = AnalyzeLegality(session, box, slot, out var lines);
-        return new TransferPreview([.. Diff(before, after)], legality, lines, conversion.Warnings, conversion.Backwards);
+        // A ROM hack Pokémon crosses as a PK3: what that changed comes before the import's own notes.
+        IReadOnlyList<string> warnings = CfruEntity.Recognize(format) is { } hack
+            ? [.. CfruEntity.Pk3Adjustments(entityBytes, hack), .. conversion.Warnings]
+            : conversion.Warnings;
+        return new TransferPreview([.. Diff(before, after)], legality, lines, warnings, conversion.Backwards);
     }
 
     private TransferLegality AnalyzeLegality(SaveEngineSession session, int box, int slot, out IReadOnlyList<string> lines)

@@ -20,6 +20,7 @@ public sealed class SaveSessionService(ISaveFileAccess access, ISaveEngine engin
         cancellationToken.ThrowIfCancellationRequested();
         var format = SaveIdentityRules.FormatOfChoice(identities?.Get(document.DocumentId)?.GameChoiceId);
         var engineSession = engine.OpenSession(bytes, document.DisplayName, format);
+        engineSession.MakeActive();
         CurrentSession?.Dispose();
         var session = new SaveSession(document, engineSession.Snapshot);
         CurrentSession = engineSession;
@@ -47,6 +48,7 @@ public sealed class SaveSessionService(ISaveFileAccess access, ISaveEngine engin
             Close();
             throw;
         }
+        reopened.MakeActive();
         CurrentSession?.Dispose();
         CurrentSession = reopened;
         Current = current with { Snapshot = reopened.Snapshot with { OriginalBytes = current.Snapshot.OriginalBytes } };

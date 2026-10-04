@@ -59,7 +59,7 @@ public static class InfoPickers
 
     /// <summary>
     /// One move row. With learn data every row carries its legality mark: legal moves are
-    /// tagged "✓ Lv 32 / TM / Egg…" in the learn colour, the rest "Not legal" in red and
+    /// tagged "✓ Lv 32 / TM / Egg…" in the learn colour, the rest "Illegal" in red and
     /// muted, so the unfiltered list (Y, or HaX mode) still says which picks are legal.
     /// </summary>
     private static PickItem MoveRow(MoveChoice move, string name, bool hasLearnData) =>
@@ -67,7 +67,7 @@ public static class InfoPickers
         {
             TypeId = move.Type,
             Category = move.Category,
-            Tag = move.Learn.IsLegal ? $"✓ {move.Learn.Label}" : hasLearnData ? "Not legal" : null,
+            Tag = move.Learn.IsLegal ? $"✓ {move.Learn.Label}" : hasLearnData ? "Illegal" : null,
             TagColor = move.Learn.IsLegal ? InfoKit.LearnColor(move.Learn.Kind) : UiTokens.Bad,
             Muted = hasLearnData && !move.Learn.IsLegal,
             Keywords = $"{TypeFacts.Name(move.Type)} {TypeFacts.CategoryName(move.Category)} {move.Learn.Label}" + (move.Learn.IsLegal ? " legal" : ""),

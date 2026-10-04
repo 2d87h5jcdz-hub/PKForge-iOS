@@ -139,7 +139,7 @@ public sealed class SafeSaveWriter(
                 throw new UnsafeSaveWriteException($"Write refused: {unsafeDiff} The original was not touched.");
         }
 
-        var backup = await backups.CreateAsync(original, changeDescription, cancellationToken).ConfigureAwait(false);
+        var backup = await backups.CreateAsync(original, changeDescription, documentId, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         await access.WriteAtomicallyAsync(documentId, candidate, cancellationToken).ConfigureAwait(false);
         // A write that passed the checks keeps the file's layout, so the candidate inherits

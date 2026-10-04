@@ -502,7 +502,7 @@ public sealed class BankBoxOverview : IPadPagingHandler
         var heading = _held is { } h
             ? $"{(_carry == Carry.Swap ? "Swapping" : "Moving")} {BankBoxDecor.Label(h)}"
             : $"All boxes · {_boxes.Length} boxes · {total} Pokémon";
-        PksmPaint.CenterText(canvas, heading, 16 * _density, 24 * _density, title, SKColors.White, Pksm.LogoVoid);
+        PksmPaint.CenterText(canvas, heading, 16 * _density, 24 * _density, title, ColorTheme.Current.Bright, Pksm.LogoVoid);
 
         canvas.Save();
         canvas.ClipRect(_grid);

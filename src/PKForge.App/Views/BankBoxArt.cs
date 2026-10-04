@@ -42,6 +42,13 @@ public static class BankBoxArt
 
     public static void Paint(SKCanvas canvas, SKRect rect, int box, Action invalidate) => Paint(canvas, rect, Of(box), invalidate);
 
+    /// <summary>A box's wallpaper picture and its average colour; null for a flat colour, or while it loads.</summary>
+    public static (SKBitmap Art, SKColor Average)? Art(int box, Action invalidate)
+    {
+        if (Of(box).ArtAsset is not { } asset || Picture(asset, invalidate) is not { } picture) return null;
+        lock (Gate) return (picture, Averages.TryGetValue(asset, out var average) ? average : Pksm.BoxWallpapers[0]);
+    }
+
     /// <summary>Fills <paramref name="rect"/> with the wallpaper, a picture cropped to fill.</summary>
     public static void Paint(SKCanvas canvas, SKRect rect, BankWallpaper wallpaper, Action invalidate)
     {

@@ -4,7 +4,7 @@ namespace PKForge.Domain;
 /// lines (the drill-in text) plus the first offending line as the plain-language
 /// problem summary. Empty problem means legal.</summary>
 public sealed record SlotLegality(
-    int Box, int Slot, bool Valid, string Problem, IReadOnlyList<string> Report);
+    int Box, int Slot, bool Valid, string Problem, IReadOnlyList<string> Report, IReadOnlyList<LegalityCheck>? Checks = null);
 
 /// <summary>The identity facts a clone shares. The games' RNG makes exact EC+PID
 /// collisions effectively impossible, so an identical pair is a duplicate (Gen 6+);

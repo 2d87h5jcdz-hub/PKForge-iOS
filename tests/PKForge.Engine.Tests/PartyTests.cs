@@ -20,6 +20,29 @@ public sealed class PartyTests
     }
 
     [Fact]
+    public void PartyReordersLikeTheGames()
+    {
+        using var session = new SaveEngineSession(File.ReadAllBytes(CorpusPath("SM Project 802.main")));
+        var exported = session.ExportSlot(-1, 0);
+        while (session.ReadEntity(-1, 5).IsEmpty)
+            Assert.True(session.ImportSlot(-1, 0, exported.Data));
+        string[] names = ["ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX"];
+        for (var i = 0; i < 6; i++)
+            session.ApplyEdit(-1, i, new EntityEdit(Nickname: names[i]));
+        string[] Order() => [.. Enumerable.Range(0, 6).Select(i => session.ReadEntity(-1, i).Nickname)];
+
+        // Onto another Pokémon, far away: the two swap and the rest stay put.
+        session.MoveSlot(-1, 1, -1, 4);
+        Assert.Equal(["ONE", "FIVE", "THREE", "FOUR", "TWO", "SIX"], Order());
+
+        // Onto an empty slot: the Pokémon goes to the end and the party stays packed.
+        session.ReleaseSlot(-1, 5);
+        session.MoveSlot(-1, 0, -1, 5);
+        Assert.Equal(["FIVE", "THREE", "FOUR", "TWO", "ONE"], Order()[..5]);
+        Assert.True(session.ReadEntity(-1, 5).IsEmpty);
+    }
+
+    [Fact]
     public void PartyRoundTripsThroughEveryOperation()
     {
         var engine = new SaveEngine();

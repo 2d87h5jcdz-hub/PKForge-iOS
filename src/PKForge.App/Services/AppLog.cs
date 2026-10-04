@@ -45,7 +45,19 @@ public static class AppLog
         };
 #if ANDROID
         Android.Runtime.AndroidEnvironment.UnhandledExceptionRaiser += (_, args) =>
+        {
+            // MAUI logs a failed image load through the handler's services. When the image
+            // finishes after its window was torn down, getting that logger throws instead:
+            // the image is gone with its page, so this is not worth a crash.
+            if (args.Exception is ObjectDisposedException { ObjectName: "IServiceProvider" } disposed
+                && disposed.StackTrace?.Contains("Microsoft.Maui.TaskExtensions", StringComparison.Ordinal) == true)
+            {
+                Warn("app", "An image finished loading after its window closed");
+                args.Handled = true;
+                return;
+            }
             WriteCrash("Unhandled exception on the Android main thread", args.Exception, null);
+        };
         var previous = Java.Lang.Thread.DefaultUncaughtExceptionHandler;
         Java.Lang.Thread.DefaultUncaughtExceptionHandler = new JavaCrashHandler(previous);
 #endif

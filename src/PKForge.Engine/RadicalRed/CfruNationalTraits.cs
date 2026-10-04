@@ -21,11 +21,11 @@ internal static class CfruNationalTraits
         return info is null ? [50, 50, 50, 50, 50, 50] : [info.HP, info.ATK, info.DEF, info.SPA, info.SPD, info.SPE];
     }
 
-    /// <summary>Primary + secondary type ids (modern national numbering).</summary>
+    /// <summary>Primary + secondary type ids (modern national numbering); one id for a single type.</summary>
     public static int[] TypesOf(int national)
     {
         var info = PersonalOf(national);
-        return info is null ? [0] : [info.Type1, info.Type2];
+        return info is null ? [0] : info.Type1 == info.Type2 ? [info.Type1] : [info.Type1, info.Type2];
     }
 
     /// <summary>Gender from the PID low byte and the national gender ratio:

@@ -33,8 +33,9 @@ public static class SaveIdentitySheet
         var options = new List<PadOption>();
         if (offerOpen) options.Add(new PadOption(OpenOption, IconPath: "play"));
         options.Add(new PadOption(RenameOption, IconPath: "rename"));
-        options.Add(new PadOption(ColorOption, Glyph: "●", Accent: SaveColors.For(resolved?.ColorKey, save.Generation)));
-        if (guess is not null) options.Add(new PadOption(GameOption, IconPath: "game"));
+        options.Add(new PadOption(ColorOption, Glyph: "●", Accent: SaveColors.For(resolved?.ColorKey, save.Generation),
+            Detail: "The colour of this save's cartridge on the Home shelf."));
+        if (guess is not null) options.Add(new PadOption(GameOption, IconPath: "game", Detail: "Say which game this is, from those that share its save format."));
         // Only saves the box already warned about as a suspected ROM hack carry the choice.
         var flaggedHack = RomHackNotice.IsFlagged(save.DocumentId);
         var acceptedHack = store.Get(save.DocumentId)?.AcceptedHackRisk == true;
@@ -43,7 +44,7 @@ public static class SaveIdentitySheet
         else if (flaggedHack)
             options.Add(new PadOption(RomHackNotice.EditOption, Glyph: "!", Accent: UiTokens.Bad, Detail: $"{RomHackNotice.Marker} · read-only now"));
         options.Add(new PadOption(HideOption, IconPath: "hide", Detail: "Remove from Home and pickers. Settings can show it again."));
-        if (resolved is { IsCustomized: true }) options.Add(new PadOption(ResetOption, IconPath: "restore"));
+        if (resolved is { IsCustomized: true }) options.Add(new PadOption(ResetOption, IconPath: "restore", Detail: "Forget your name, colour and game choices. The file is not touched."));
 
         var choice = await PadMenu.ShowAsync(host, save.GameLabel, Describe(save), [.. options]);
         var current = store.Get(save.DocumentId) ?? new SaveIdentity(save.DocumentId);
@@ -103,7 +104,7 @@ public static class SaveIdentitySheet
     private static async Task PickColorAsync(Grid host, ISaveIdentityStore store, SaveIdentity current, int generation)
     {
         const string eraOption = "Console color";
-        var options = new List<PadOption> { new(eraOption, Glyph: "●", Accent: Kit.EraColor(generation)) };
+        var options = new List<PadOption> { new(eraOption, Glyph: "●", Accent: Kit.EraColor(generation), Detail: "The standard colour for this generation.") };
         options.AddRange(SaveIdentityPalette.Swatches.Select(s =>
             new PadOption(s.Key == current.ColorKey ? $"{s.Name} ✓" : s.Name, Glyph: "●", Accent: SaveColors.For(s.Key, generation))));
         var choice = await PadMenu.ShowAsync(host, "Cartridge color", null, [.. options]);

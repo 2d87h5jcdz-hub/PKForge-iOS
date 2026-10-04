@@ -11,5 +11,7 @@
     <EmbeddedResource Include="Resources/dexfacts.tsv.gz" LogicalName="PKForge.Domain.dexfacts.tsv.gz" />
     <!-- PKHeX form -> PokeAPI HOME/Showdown sprite stems, built by tools/SpriteForms/build.py. -->
     <EmbeddedResource Include="Resources/spriteforms.tsv" LogicalName="PKForge.Domain.spriteforms.tsv" />
+    <!-- PKHeX form -> Pokémon Showdown front sprite / icon. -->
+    <EmbeddedResource Include="Resources/showdownsprites.tsv" LogicalName="PKForge.Domain.showdownsprites.tsv" />
   </ItemGroup>
 </Project>

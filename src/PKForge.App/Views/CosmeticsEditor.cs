@@ -18,11 +18,13 @@ public static class CosmeticsEditor
         {
             var c = session.GetCosmetics(box, slot);
             var options = new List<PadOption>();
-            if (c.Markings.Count != 0) options.Add(new PadOption($"Box markings · {c.Markings.Count(m => m.Value != 0)}/{c.Markings.Count}"));
-            if (c.ContestStats.Count != 0) options.Add(new PadOption($"Contest stats · {c.ContestStats.Sum()}/1530"));
-            if (c.SupportsSize || c.SupportsScale) options.Add(new PadOption("Size"));
-            if (c.SupportsAffection || c.SupportsFullnessEnjoyment) options.Add(new PadOption("Care"));
-            if (HasSpecial(c)) options.Add(new PadOption("Special"));
+            if (c.Markings.Count != 0) options.Add(new PadOption($"Box markings · {c.Markings.Count(m => m.Value != 0)}/{c.Markings.Count}",
+                Detail: "The circle, heart and other symbols shown in the box."));
+            if (c.ContestStats.Count != 0) options.Add(new PadOption($"Contest stats · {c.ContestStats.Sum()}/1530",
+                Detail: "Cool, Beauty, Cute, Smart, Tough and Sheen, used in contests."));
+            if (c.SupportsSize || c.SupportsScale) options.Add(new PadOption("Size", Detail: "The hidden values behind its height, weight or size."));
+            if (c.SupportsAffection || c.SupportsFullnessEnjoyment) options.Add(new PadOption("Care", Detail: "Affection, fullness and enjoyment."));
+            if (HasSpecial(c)) options.Add(new PadOption("Special", Detail: "Favorite, Dynamax, Alpha and sociability, where the game has them."));
 
             if (options.Count == 0)
             {
@@ -110,10 +112,10 @@ public static class CosmeticsEditor
         var options = new List<PadOption>();
         if (c.SupportsSize)
         {
-            options.Add(new PadOption($"Height scalar · {c.HeightScalar}/255"));
-            options.Add(new PadOption($"Weight scalar · {c.WeightScalar}/255"));
+            options.Add(new PadOption($"Height scalar · {c.HeightScalar}/255", Detail: "0 is the shortest, 255 the tallest."));
+            options.Add(new PadOption($"Weight scalar · {c.WeightScalar}/255", Detail: "0 is the lightest, 255 the heaviest."));
         }
-        if (c.SupportsScale) options.Add(new PadOption($"Scale · {c.Scale}/255"));
+        if (c.SupportsScale) options.Add(new PadOption($"Scale · {c.Scale}/255", Detail: "0 is the smallest, 255 the largest."));
         var choice = await EditorMenu.ShowAsync(host, "Size", null, options.ToArray());
         if (choice is null) return false;
 
@@ -134,8 +136,8 @@ public static class CosmeticsEditor
         var options = new List<PadOption>();
         if (c.SupportsAffection)
         {
-            options.Add(new PadOption($"OT affection · {c.OriginalTrainerAffection}/255"));
-            options.Add(new PadOption($"Handler affection · {c.HandlingTrainerAffection}/255"));
+            options.Add(new PadOption($"OT affection · {c.OriginalTrainerAffection}/255", Detail: "Affection toward its original trainer."));
+            options.Add(new PadOption($"Handler affection · {c.HandlingTrainerAffection}/255", Detail: "Affection toward the trainer it was traded to."));
         }
         if (c.SupportsFullnessEnjoyment)
         {
@@ -164,10 +166,10 @@ public static class CosmeticsEditor
         if (c.SupportsFavorite) options.Add(new PadOption($"Favorite · {(c.IsFavorite ? "on" : "off")}"));
         if (c.SupportsDynamax)
         {
-            options.Add(new PadOption($"Dynamax level · {c.DynamaxLevel}/10"));
-            options.Add(new PadOption($"Gigantamax factor · {(c.CanGigantamax ? "on" : "off")}"));
+            options.Add(new PadOption($"Dynamax level · {c.DynamaxLevel}/10", Detail: "Each level adds HP while it is Dynamaxed."));
+            options.Add(new PadOption($"Gigantamax factor · {(c.CanGigantamax ? "on" : "off")}", Detail: "Lets it Gigantamax if its species has that form."));
         }
-        if (c.SupportsAlpha) options.Add(new PadOption($"Alpha · {(c.IsAlpha ? "on" : "off")}"));
+        if (c.SupportsAlpha) options.Add(new PadOption($"Alpha · {(c.IsAlpha ? "on" : "off")}", Detail: "Marks it as an Alpha, the bigger kind from the Legends games."));
         if (c.SupportsSociability) options.Add(new PadOption($"Sociability · {c.Sociability}"));
         var choice = await EditorMenu.ShowAsync(host, "Special", null, options.ToArray());
         if (choice is null) return false;

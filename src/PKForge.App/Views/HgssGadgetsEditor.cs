@@ -68,9 +68,9 @@ public static class HgssGadgetsEditor
             var options = new List<PadOption>();
             if (!blocked)
             {
-                options.Add(new PadOption(Steps, IconPath: "records"));
-                options.Add(new PadOption(Watts, IconPath: "stats"));
-                options.Add(new PadOption(UnlockAll, IconPath: "all", Accent: UiTokens.Green));
+                options.Add(new PadOption(Steps, IconPath: "records", Detail: "The total steps the Pokéwalker has counted."));
+                options.Add(new PadOption(Watts, IconPath: "stats", Detail: "The watts stored on the Pokéwalker."));
+                options.Add(new PadOption(UnlockAll, IconPath: "all", Accent: UiTokens.Green, Detail: "Opens every course your game's language has."));
             }
             options.AddRange(state.Courses.Select(c => new PadOption(CourseLabel(c),
                 Accent: c.Unlocked ? UiTokens.Green : null, IconPath: c.Unlocked ? "check" : "padlock",

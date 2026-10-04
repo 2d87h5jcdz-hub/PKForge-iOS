@@ -102,6 +102,53 @@ public sealed class FileBankServiceTests : IDisposable
         Assert.Null(new BankBoxWallpapers(_root).Get(1));
     }
 
+    private static BankEntryInfo Info(int species) => new(species, 0, false, $"#{species}", 5, 8, "t", "PK8");
+
+    [Fact]
+    public void AddManyLandsTheWholeBatchInOneWrite()
+    {
+        var bank = new FileBankService(_root);
+        var held = bank.Add([9], Info(9)); // box 1 slot 1
+        var added = bank.AddMany(
+        [
+            new BankDeposit([1], Info(1)),
+            new BankDeposit([2], Info(2), Box: 0, Slot: 2), // a chosen slot the free scan then skips
+            new BankDeposit([3], Info(3)),
+            new BankDeposit([4], Info(4), Box: 5, Slot: 29), // past the last box: the bank grows
+        ]);
+
+        Assert.Equal([(0, 1), (0, 2), (0, 3), (5, 29)], added.Select(e => (e.Box, e.Slot)));
+        Assert.Equal(6, bank.BoxCount);
+        var reloaded = new FileBankService(_root);
+        Assert.Equal([held, .. added], reloaded.GetAll());
+        Assert.Equal([3], reloaded.GetData(added[2].Id));
+    }
+
+    [Fact]
+    public void AddManyFailingMidBatchLeavesTheBankAsItWas()
+    {
+        var bank = new FileBankService(_root);
+        var held = bank.Add([9], Info(9));
+
+        // The third deposit's bytes cannot be written, after two others already were.
+        Assert.ThrowsAny<Exception>(() => bank.AddMany(
+            [new BankDeposit([1], Info(1)), new BankDeposit([2], Info(2)), new BankDeposit(null!, Info(3)), new BankDeposit([4], Info(4))]));
+        // A placement on a taken slot or outside a box refuses the batch before anything is written.
+        Assert.Throws<InvalidOperationException>(() => bank.AddMany([new BankDeposit([1], Info(1)), new BankDeposit([2], Info(2), 0, 0)]));
+        Assert.Throws<InvalidOperationException>(() => bank.AddMany([new BankDeposit([1], Info(1), 1, 4), new BankDeposit([2], Info(2), 1, 4)]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => bank.AddMany([new BankDeposit([1], Info(1), 0, 30)]));
+        // The index write fails after every byte is down.
+        var blocker = Path.Combine(_root, "index.json.tmp");
+        Directory.CreateDirectory(blocker);
+        Assert.ThrowsAny<Exception>(() => bank.AddMany([new BankDeposit([1], Info(1)), new BankDeposit([2], Info(2), 7, 0)]));
+        Directory.Delete(blocker);
+
+        Assert.Equal([held], bank.GetAll());
+        Assert.Equal(3, bank.BoxCount);
+        Assert.Single(Directory.GetFiles(_root, "*.bin")); // no orphan bytes from any failed batch
+        Assert.Equal([held], new FileBankService(_root).GetAll());
+    }
+
     [Fact]
     public void AFailedIndexWriteLeavesEveryMutationUndone()
     {

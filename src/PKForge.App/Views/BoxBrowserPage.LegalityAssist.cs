@@ -28,12 +28,12 @@ public sealed partial class BoxBrowserPage
         var session = _sessionsFor();
         var stock = session is SaveEngineSession && session.SupportsLegalityAnalysis;
         return Menu(
-            stock ? Allowed(SaveAction.BatchEdit, new(BulkLegalize, IconPath: "fix")) : null,
-            stock ? Allowed(SaveAction.BatchEdit, new(BulkShiny, IconPath: "shiny")) : null,
-            stock ? Allowed(SaveAction.BatchEdit, new(BulkUnshiny, IconPath: "shiny")) : null,
-            stock && session!.Generation >= 6 ? Allowed(SaveAction.BatchEdit, new(BulkHandler, IconPath: "trainer")) : null,
-            session is SaveEngineSession ? Allowed(SaveAction.BatchEdit, new(BulkHeal, IconPath: "heal")) : null,
-            Allowed(SaveAction.Release, new(BulkClones, IconPath: "release")));
+            stock ? Allowed(SaveAction.BatchEdit, new(BulkLegalize, IconPath: "fix", Detail: "Rewrite the illegal marked Pokémon to their closest legal version.")) : null,
+            stock ? Allowed(SaveAction.BatchEdit, new(BulkShiny, IconPath: "shiny", Detail: "Only when a legal shiny version exists, unless HaX mode is on.")) : null,
+            stock ? Allowed(SaveAction.BatchEdit, new(BulkUnshiny, IconPath: "shiny", Detail: "Only when a legal version exists, unless HaX mode is on.")) : null,
+            stock && session!.Generation >= 6 ? Allowed(SaveAction.BatchEdit, new(BulkHandler, IconPath: "trainer", Detail: "You become their current trainer, as after a real trade.")) : null,
+            session is SaveEngineSession ? Allowed(SaveAction.BatchEdit, new(BulkHeal, IconPath: "heal", Detail: "Full HP, status and PP in the party; boxed Pokémon get PP back.")) : null,
+            Allowed(SaveAction.Release, new(BulkClones, IconPath: "release", Detail: "Keep one of each identical Pokémon and release the copies.")));
     }
 
     /// <summary>Runs a bulk entry; false when <paramref name="choice"/> is not one.</summary>

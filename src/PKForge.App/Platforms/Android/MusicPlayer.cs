@@ -100,6 +100,24 @@ public sealed class MusicPlayer : IMusicPlayer, IDisposable
         if (Autostart && _library.Count > 0) Play();
     }
 
+    private bool _pausedInBackground;
+
+    /// <summary>The app left the screen (Home, another app): music stops with it.</summary>
+    public void PauseForBackground()
+    {
+        if (_player?.IsPlaying != true) return;
+        _player.Pause();
+        _pausedInBackground = true;
+    }
+
+    /// <summary>The app is back: music paused by <see cref="PauseForBackground"/> carries on.</summary>
+    public void ResumeFromBackground()
+    {
+        if (!_pausedInBackground) return;
+        _pausedInBackground = false;
+        _player?.Start();
+    }
+
     /// <summary>Set when playback fails; the UI shows it so failures are never silent.</summary>
     public string? LastError { get; private set; }
 

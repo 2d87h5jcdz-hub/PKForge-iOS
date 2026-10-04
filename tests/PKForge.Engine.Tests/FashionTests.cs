@@ -21,6 +21,36 @@ public sealed class FashionTests
     }
 
     [Fact]
+    public void XYFashionUnlockAndMaxStyleSurviveWriteAndReload()
+    {
+        using var session = new SaveEngineSession(BlankSaveFile.Get(GameVersion.X, "PKForge", LanguageID.English), null);
+        var save = Assert.IsType<SAV6XY>(session.SaveFile);
+        Assert.True(session.SupportsLegalFashionUnlock);
+        Assert.True(session.SupportsStylePoints);
+        Assert.Equal(0, session.GetStylePoints());
+
+        session.UnlockAllLegalFashion();
+        session.SetStylePoints(SaveEngineSession.MaxStylePoints);
+        var expected = save.Fashion.Data.ToArray();
+        Assert.Contains(expected, b => b != 0);
+
+        // Blank X/Y bytes are not auto-detected, so reload through the format constructor.
+        using var reloaded = new SaveEngineSession(new SAV6XY(save.Write().ToArray()), null);
+        var again = Assert.IsType<SAV6XY>(reloaded.SaveFile);
+        Assert.Equal(expected, again.Fashion.Data.ToArray());
+        Assert.Equal(SaveEngineSession.MaxStylePoints, reloaded.GetStylePoints());
+    }
+
+    [Fact]
+    public void StylePointsAreXYOnly()
+    {
+        using var session = new SaveEngineSession(BlankSaveFile.Get(GameVersion.OR, "PKForge", LanguageID.English), null);
+        Assert.False(session.SupportsStylePoints);
+        Assert.False(session.SupportsLegalFashionUnlock);
+        Assert.Throws<NotSupportedException>(() => session.SetStylePoints(1));
+    }
+
+    [Fact]
     public void OtherFormatsRejectLegalFashionUnlock()
     {
         using var session = (SaveEngineSession)new SaveEngine().OpenBlankSession(7);

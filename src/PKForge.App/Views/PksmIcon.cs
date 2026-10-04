@@ -5,12 +5,16 @@ namespace PKForge.App.Views;
 /// <summary>
 /// The bundled PKSM pixel-icon set as MAUI image sources. Icons ship as PNGs under
 /// ui/pksm/ (see Resources/UI/ATTRIBUTION.md); they are tinted once on first use —
-/// native authored color, logo cyan for navy panels, white, or logo-void — and cached.
+/// native authored color, logo cyan for navy panels, white, or logo-void — and cached until the
+/// color theme changes.
 /// </summary>
 public static class PksmIcons
 {
     private static readonly Dictionary<string, byte[]> Png = new(StringComparer.Ordinal);
     private static readonly object Gate = new();
+
+    // Cyan and dark icons are tinted with theme colors: a new theme starts a new cache.
+    static PksmIcons() => ColorTheme.Changed += () => { lock (Gate) Png.Clear(); };
 
     // Official Gen VIII status sprites sourced from Bulbagarden Archives. Kept inline
     // because these tiny indexed PNGs are exact game art, not recolorable PKSM glyphs.

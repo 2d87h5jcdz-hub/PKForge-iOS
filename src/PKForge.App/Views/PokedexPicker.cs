@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Microsoft.Maui.Controls.Shapes;
 using PKForge.App.Services;
 using PKForge.App.Theme;
@@ -23,42 +22,20 @@ public sealed class PokedexPicker : IPadHandler
     private static readonly (int Gen, int First, int Last)[] GenRanges =
         [(1, 1, 151), (2, 152, 251), (3, 252, 386), (4, 387, 493), (5, 494, 649), (6, 650, 721), (7, 722, 809), (8, 810, 905), (9, 906, 1025)];
 
-    private sealed class DexEntry(int id, string name, string? iconPath, IReadOnlyList<int> types, int gen,
-        BaseStats stats, SpeciesFormFlags forms) : INotifyPropertyChanged
-    {
-        private bool _isSelected;
-        public int Id { get; } = id;
-        public string Name { get; } = name;
-        public string? IconPath { get; } = iconPath;
-        public IReadOnlyList<int> Types { get; } = types;
-        public int Gen { get; } = gen;
-        public BaseStats Stats { get; } = stats;
-        public SpeciesFormFlags Forms { get; } = forms;
-        public bool IsSelected
-        {
-            get => _isSelected;
-            set
-            {
-                if (_isSelected == value) return;
-                _isSelected = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
-            }
-        }
-        public event PropertyChangedEventHandler? PropertyChanged;
-    }
+    private sealed record DexEntry(int Id, string Name, string? IconPath, IReadOnlyList<int> Types, int Gen,
+        BaseStats Stats, SpeciesFormFlags Forms);
 
     private readonly TaskCompletionSource<PickItem?> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly List<DexEntry> _all;
     private readonly Grid _host;
     private readonly Grid _overlay;
     private readonly GamepadRouter? _router;
-    private readonly CollectionView _grid;
+    private readonly DexGridView _grid;
     private List<DexEntry> _filtered;
     private string _query = "";
     private readonly HashSet<int> _typeFilters = [];
     private int? _genFilter;
     private int _index;
-    private DexEntry? _selectedEntry;
     private readonly SecondScreenState? _state;
     private readonly SecondScreenClaim? _claim;
     private readonly List<Border> _typeChips = [];
@@ -248,12 +225,17 @@ public sealed class PokedexPicker : IPadHandler
         };
         search.TextChanged += (_, args) => { _query = args.NewTextValue ?? ""; DebounceRefilter(); };
 
-        _grid = new CollectionView
+        // The species scroll like the Pokédex screens; a tap picks, the pad aims.
+        var sprites = IPlatformApplication.Current!.Services.GetRequiredService<ISpriteService>();
+        _grid = new DexGridView(sprites);
+        _grid.CursorChanged += index =>
         {
-            SelectionMode = SelectionMode.None,
-            ItemsLayout = new GridItemsLayout(6, ItemsLayoutOrientation.Vertical) { VerticalItemSpacing = 6, HorizontalItemSpacing = 6 },
-            ItemTemplate = new DataTemplate(BuildCell),
-            ItemsSource = _filtered,
+            _index = index;
+            if (_state is not null && index < _filtered.Count) _state.PreviewSpecies = _filtered[index].Id;
+        };
+        _grid.Tapped += index =>
+        {
+            if (index < _filtered.Count) Close(new PickItem(_filtered[index].Id, _filtered[index].Name, _filtered[index].IconPath));
         };
         var content = new Grid
         {
@@ -300,9 +282,7 @@ public sealed class PokedexPicker : IPadHandler
             await MainThread.InvokeOnMainThreadAsync(() =>
             {
                 _all.AddRange(entries);
-                _filtered = ApplyFilters();
-                _grid.ItemsSource = _filtered;
-                Highlight(0);
+                Refilter();
             });
         }
         catch (Exception error)
@@ -310,8 +290,6 @@ public sealed class PokedexPicker : IPadHandler
             System.Diagnostics.Debug.WriteLine($"Pokédex initialization: {error}");
         }
     }
-
-    private static readonly string[] RomanGens = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"];
 
     /// <summary>Toggles one type in the multi-type filter (a mon must match ALL selected types).</summary>
     private void ToggleType(int type)
@@ -366,15 +344,10 @@ public sealed class PokedexPicker : IPadHandler
         for (var type = 0; type < TypeNames.Length; type++)
         {
             var captured = type;
-            var chip = new Border
-            {
-                BackgroundColor = TypePalette.ForType(type),
-                StrokeThickness = 0,
-                Opacity = 0.55,
-                StrokeShape = new RoundRectangle { CornerRadius = 6 },
-                Padding = new Thickness(8, 3),
-                Content = new Label { Text = TypeNames[type], TextColor = TypePalette.ForegroundForType(type), FontSize = UiTokens.TextSmall, FontAttributes = FontAttributes.Bold },
-            };
+            // The type plate, dimmed until the filter is on.
+            var chip = InfoKit.TypeBadge(type, 62);
+            chip.Opacity = 0.55;
+            chip.InputTransparent = false;
             var tap = new TapGestureRecognizer();
             tap.Tapped += (_, _) => ToggleType(captured);
             chip.GestureRecognizers.Add(tap);
@@ -393,7 +366,7 @@ public sealed class PokedexPicker : IPadHandler
                 Opacity = 0.55,
                 StrokeShape = new RoundRectangle { CornerRadius = 6 },
                 Padding = new Thickness(10, 3),
-                Content = new Label { Text = $"Gen {RomanGens[gen - 1]}", TextColor = Colors.White, FontSize = UiTokens.TextSmall, FontAttributes = FontAttributes.Bold },
+                Content = new Label { Text = $"Gen {DexRegions.All[gen - 1].Roman}", TextColor = Colors.White, FontSize = UiTokens.TextSmall, FontAttributes = FontAttributes.Bold },
             };
             var tap = new TapGestureRecognizer();
             tap.Tapped += (_, _) =>
@@ -456,85 +429,6 @@ public sealed class PokedexPicker : IPadHandler
     }
 
     /// <summary>A compact logo-deck tile: normalized sprite, strong name plate, cyan focus.</summary>
-    private View BuildCell()
-    {
-        var icon = new Image
-        {
-            HeightRequest = 48,
-            WidthRequest = 62,
-            Aspect = Aspect.AspectFit,
-            HorizontalOptions = LayoutOptions.Center,
-            VerticalOptions = LayoutOptions.Center,
-        };
-        icon.SetBinding(Image.SourceProperty, nameof(DexEntry.IconPath));
-
-        var name = new Label
-        {
-            TextColor = UiTokens.Ink0,
-            FontFamily = DsChrome.PixelFont,
-            FontSize = UiTokens.TextSmall,
-            FontAttributes = FontAttributes.Bold,
-            HorizontalTextAlignment = TextAlignment.Center,
-            LineBreakMode = LineBreakMode.TailTruncation,
-            MaxLines = 1,
-        };
-        name.SetBinding(Label.TextProperty, nameof(DexEntry.Name));
-
-        var number = new Label
-        {
-            TextColor = UiTokens.InkSoft,
-            FontFamily = DsChrome.PixelFont,
-            FontSize = UiTokens.TextSmall,
-            HorizontalTextAlignment = TextAlignment.Center,
-        };
-        number.SetBinding(Label.TextProperty, new Binding(nameof(DexEntry.Id), stringFormat: "No.{0:000}"));
-
-        var namePlate = new Border
-        {
-            BackgroundColor = UiTokens.MaroonDeep,
-            StrokeThickness = 0,
-            StrokeShape = new RoundRectangle { CornerRadius = 3 },
-            Padding = new Thickness(3, 1),
-            Content = new VerticalStackLayout { Spacing = 0, Children = { name, number } },
-        };
-
-        var cell = new Border
-        {
-            HeightRequest = 78,
-            BackgroundColor = UiTokens.RowStripe,
-            Stroke = Colors.Transparent,
-            StrokeThickness = 1.2,
-            StrokeShape = new RoundRectangle { CornerRadius = UiTokens.ControlRadius },
-            Padding = new Thickness(4, 3),
-            Content = new Grid
-            {
-                RowSpacing = 2,
-                RowDefinitions = [new(GridLength.Star), new(GridLength.Auto)],
-                Children = { icon, namePlate },
-            },
-        };
-        Grid.SetRow(namePlate, 1);
-        cell.Triggers.Add(new DataTrigger(typeof(Border))
-        {
-            Binding = new Binding(nameof(DexEntry.IsSelected)),
-            Value = true,
-            Setters =
-            {
-                new Setter { Property = Border.StrokeProperty, Value = UiTokens.Ink0 },
-                new Setter { Property = Border.StrokeThicknessProperty, Value = 2.0 },
-                new Setter { Property = VisualElement.BackgroundColorProperty, Value = UiTokens.SelectFill },
-            },
-        });
-        var tap = new TapGestureRecognizer();
-        tap.Tapped += (_, _) =>
-        {
-            if (cell.BindingContext is DexEntry entry)
-                Close(new PickItem(entry.Id, entry.Name, entry.IconPath));
-        };
-        cell.GestureRecognizers.Add(tap);
-        return cell;
-    }
-
     private List<DexEntry> ApplyFilters()
     {
         IEnumerable<DexEntry> source = _all;
@@ -620,11 +514,9 @@ public sealed class PokedexPicker : IPadHandler
 
     private void Refilter()
     {
-        if (_selectedEntry is not null) _selectedEntry.IsSelected = false;
-        _selectedEntry = null;
         _filtered = ApplyFilters();
         _index = 0;
-        _grid.ItemsSource = _filtered;
+        _grid.Show(_filtered.Select(e => e.Id).ToList(), _ => new DexGridView.Look(Seen: true, Caught: false));
         Highlight(0);
     }
 
@@ -632,10 +524,10 @@ public sealed class PokedexPicker : IPadHandler
     {
         switch (button)
         {
-            case PadButton.Left: Highlight(_index - 1); return true;
-            case PadButton.Right: Highlight(_index + 1); return true;
-            case PadButton.Up: Highlight(_index - 6); return true;
-            case PadButton.Down: Highlight(_index + 6); return true;
+            case PadButton.Left: _grid.Move(-1, 0); return true;
+            case PadButton.Right: _grid.Move(1, 0); return true;
+            case PadButton.Up: _grid.Move(0, -1); return true;
+            case PadButton.Down: _grid.Move(0, 1); return true;
             case PadButton.A:
                 if (_index >= 0 && _index < _filtered.Count)
                 {
@@ -657,16 +549,11 @@ public sealed class PokedexPicker : IPadHandler
     {
         if (_filtered.Count == 0)
         {
-            if (_selectedEntry is not null) _selectedEntry.IsSelected = false;
-            _selectedEntry = null;
             if (_state is not null) _state.PreviewSpecies = null;
             return;
         }
         _index = Math.Clamp(index, 0, _filtered.Count - 1);
-        if (_selectedEntry is not null) _selectedEntry.IsSelected = false;
-        _selectedEntry = _filtered[_index];
-        _selectedEntry.IsSelected = true;
-        _grid.ScrollTo(_index, position: ScrollToPosition.Center, animate: false);
+        _grid.SetCursor(_index);
         if (_state is not null) _state.PreviewSpecies = _filtered[_index].Id;
     }
 
@@ -690,10 +577,10 @@ public sealed class PokedexPicker : IPadHandler
     {
         var choice = await PadMenu.ShowAsync(_host, "Filters",
             "Categories, power, and themes combine with the type gems and generation chips.",
-            new PadOption($"Category: {_category}", IconPath: "type"),
-            new PadOption($"Power: {_power}", IconPath: "battle"),
-            new PadOption($"Theme: {_theme}", IconPath: "filter"),
-            new PadOption("Clear all filters", IconPath: "clear"));
+            new PadOption($"Category: {_category}", IconPath: "type", Detail: "Legendary, starter, fossil, baby and other groups."),
+            new PadOption($"Power: {_power}", IconPath: "battle", Detail: "Base stat total or battle style, such as fast."),
+            new PadOption($"Theme: {_theme}", IconPath: "filter", Detail: "Fun groups like dragons, birds or dinosaurs."),
+            new PadOption("Clear all filters", IconPath: "clear", Detail: "Also clears the type and generation picks."));
         switch (choice)
         {
             case "Clear all filters": ClearFilters(); return;

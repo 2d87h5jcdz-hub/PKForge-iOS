@@ -7,9 +7,9 @@ using SkiaSharp;
 namespace PKForge.App.Views;
 
 /// <summary>
-/// Shared LCD box-grid painter (main browser + bank vault): the PKSM storage world.
-/// Saturated wallpaper flats with the dot lattice, soft white slots, gold selection
-/// frames, and dashed gold carry ghosts.
+/// The save box painter (<see cref="Paint"/>, in the designer's direction, see
+/// <see cref="StoragePaint"/>), plus the square-cell grid helpers and badges the other grids
+/// (Bank, Bank search, Pokédex, second screen) share.
 /// </summary>
 public static class BoxGridRenderer
 {
@@ -25,15 +25,6 @@ public static class BoxGridRenderer
     /// <summary>The box's wallpaper flat, cycling through the storage palette.</summary>
     public static SKColor WallpaperAt(int boxIndex) =>
         Pksm.BoxWallpapers[((boxIndex % Pksm.BoxWallpapers.Length) + Pksm.BoxWallpapers.Length) % Pksm.BoxWallpapers.Length];
-
-    /// <summary>The box frame tint (the LcdPanel border), derived from the wallpaper flat.</summary>
-    public static (Color Background, Color Frame) HueFor(int boxIndex)
-    {
-        var wallpaper = WallpaperAt(boxIndex);
-        var shade = Pksm.WallpaperShade(wallpaper);
-        return (Color.FromRgb(wallpaper.Red, wallpaper.Green, wallpaper.Blue),
-            Color.FromRgb(shade.Red, shade.Green, shade.Blue));
-    }
 
     /// <summary>The square-cell layout every grid consumer shares: paint and hit-test agree.</summary>
     public static (float Cell, float OffsetX, float OffsetY) GridMetrics(SKSize canvasSize)
@@ -68,12 +59,74 @@ public static class BoxGridRenderer
 
     public static SKRect GridBounds(SKImageInfo info) => GridBounds(new SKSize(info.Width, info.Height));
 
-    /// <summary>The PKSM box backdrop: saturated wallpaper flat and faint dot lattice.</summary>
-    public static void PaintBackdrop(SKCanvas canvas, SKImageInfo info, int boxIndex)
+    /// <summary>
+    /// The save box's layout: the canvas is the well, and the cells fill it inside a side
+    /// margin, wider than tall like the designer's box. Unit 1 is the 1920×1080 mockup.
+    /// </summary>
+    public readonly record struct StorageLayout(SKRect Area, float CellWidth, float CellHeight, float Unit)
     {
-        PksmPaint.Wallpaper(canvas, new SKRect(0, 0, info.Width, info.Height), WallpaperAt(boxIndex));
+        public SKRect Cell(int index)
+        {
+            var col = index % Columns;
+            var row = index / Columns;
+            return new SKRect(Area.Left + col * CellWidth, Area.Top + row * CellHeight,
+                Area.Left + (col + 1) * CellWidth, Area.Top + (row + 1) * CellHeight);
+        }
     }
 
+    // The mockup's well is 1072×702 design pixels; its insets scale with the canvas.
+    private const float DesignWellWidth = 1072f;
+    private const float DesignWellHeight = 702f;
+
+    public static StorageLayout StorageMetrics(SKSize canvasSize)
+    {
+        var insetX = canvasSize.Width * StoragePaint.WellInsetX / DesignWellWidth;
+        var insetY = canvasSize.Height * StoragePaint.WellInsetY / DesignWellHeight;
+        var area = new SKRect(insetX, insetY, canvasSize.Width - insetX, canvasSize.Height - insetY);
+        var cellWidth = area.Width / Columns;
+        var cellHeight = area.Height / Rows;
+        var unit = Math.Min(cellWidth / StoragePaint.DesignCellWidth, cellHeight / StoragePaint.DesignCellHeight);
+        return new StorageLayout(area, cellWidth, cellHeight, unit);
+    }
+
+    /// <summary>Maps a touch on the save box to a slot; -1 outside the cells.</summary>
+    public static int StorageSlotFromTouch(SKSize canvasSize, SKPoint location)
+    {
+        var layout = StorageMetrics(canvasSize);
+        if (!layout.Area.Contains(location)) return -1;
+        var col = Math.Min(Columns - 1, (int)((location.X - layout.Area.Left) / layout.CellWidth));
+        var row = Math.Min(Rows - 1, (int)((location.Y - layout.Area.Top) / layout.CellHeight));
+        return row * Columns + col;
+    }
+
+    /// <summary>
+    /// One box as the storage grid draws it, whoever owns it (a save's box, a Bank box): the
+    /// slots, the cursor, the Pokémon in hand and the marks painted on the slots.
+    /// </summary>
+    /// <param name="Slots">The 30 slots; a null species is an empty slot.</param>
+    /// <param name="CarryOrigin">The slot the Pokémon in hand was lifted from, when it is in this box.</param>
+    /// <param name="Carried">The Pokémon in hand, whichever box it came from.</param>
+    /// <param name="Marking">Multi-select is on: the cursor turns green.</param>
+    /// <param name="RangeMark">A slot inside the rectangle being swept: whether it marks (true) or unmarks.</param>
+    /// <param name="Box">The box's index, so the hand ends a landing when the box changes.</param>
+    internal sealed record StorageScene(
+        IReadOnlyList<Domain.SlotSummary> Slots,
+        int Selected,
+        int? CarryOrigin,
+        Domain.SlotSummary? Carried,
+        bool Marking,
+        Func<int, bool> IsMarked,
+        Func<int, bool?> RangeMark,
+        int Box,
+        IReadOnlySet<int>? Locked = null,
+        IReadOnlyDictionary<int, bool>? Verdicts = null,
+        bool BdspStyle = false);
+
+    /// <summary>
+    /// Paints the save box: the well, each Pokémon standing on its row's ground line (the
+    /// Showdown icon; PKHeX's shiny art sized to that icon for shinies), and the cursor as a
+    /// light pool under the selected Pokémon, lifted, with the pixel pointer above it.
+    /// </summary>
     public static void Paint(
         SKCanvas canvas,
         SKImageInfo info,
@@ -82,144 +135,202 @@ public static class BoxGridRenderer
         ThemeService theme,
         Action invalidate,
         IReadOnlySet<int>? lockedSlots = null,
-        CarryHand? hand = null)
+        CarryHand? hand = null,
+        (SKImage Art, SKColor Average)? wallpaper = null)
     {
-        var wallpaper = WallpaperAt(viewModel.BoxIndex);
-        var cell = GridMetrics(info).Cell;
-        PaintBackdrop(canvas, info, viewModel.BoxIndex);
-        // BDSP and Luminescent Platinum boxes wear the BDSP-style icons once downloaded.
-        var bdspStyle = Domain.BdspIcons.AppliesTo(viewModel.Save?.Format);
+        var scene = new StorageScene(
+            viewModel.VisibleSlots,
+            viewModel.SelectedSlot,
+            viewModel.CarrySource is { } source && source.Box == viewModel.BoxIndex ? source.Slot : null,
+            viewModel.CarrySource is not null ? viewModel.CarriedSummary : null,
+            viewModel.SelectMode,
+            // Marks show only while multi-select is on, as before.
+            index => viewModel.SelectMode && viewModel.IsMarked(viewModel.BoxIndex, index),
+            index => viewModel.PendingRectangle is { } range && viewModel.InPendingRectangle(index) ? range.Mark : null,
+            viewModel.BoxIndex,
+            lockedSlots,
+            viewModel.CurrentBoxLegality,
+            // BDSP and Luminescent Platinum boxes wear the BDSP-style icons once downloaded.
+            Domain.BdspIcons.AppliesTo(viewModel.Save?.Format));
+        PaintScene(canvas, info, scene, sprites, invalidate, hand, (c, well, unit) =>
+        {
+            // The box's own wallpaper from the game, toned down in the player's chosen style.
+            if (wallpaper is { } art) StoragePaint.Wallpaper(c, well, art.Art, art.Average, BoxBackground.Style, unit);
+        });
+    }
 
-        // White ink with the wallpaper-shade shadow: text that reads on any flat.
-        var shadow = Pksm.WallpaperShade(wallpaper);
-        using var font = new SKFont { Size = cell * 0.15f, Edging = SKFontEdging.Antialias };
+    /// <summary>Paints any box in the storage look; <paramref name="backdrop"/> draws its wallpaper inside the well.</summary>
+    internal static void PaintScene(SKCanvas canvas, SKImageInfo info, StorageScene scene, ISpriteService sprites,
+        Action invalidate, CarryHand? hand, Action<SKCanvas, SKRect, float>? backdrop = null)
+    {
+        var layout = StorageMetrics(new SKSize(info.Width, info.Height));
+        var unit = layout.Unit;
+        canvas.Clear(SKColors.Transparent);
+        var well = new SKRect(0, 0, info.Width, info.Height);
+        StoragePaint.WellPanel(canvas, well, unit);
+        backdrop?.Invoke(canvas, well, unit);
+        var bdspStyle = scene.BdspStyle;
+        var marking = scene.Marking;
+        var lockedSlots = scene.Locked;
 
-        var slots = viewModel.VisibleSlots;
+        using var font = new SKFont { Size = layout.CellHeight * 0.15f, Edging = SKFontEdging.Antialias };
+        using var star = new SKFont(BoxBrowserPage.PixelTypeface(), 28f * unit);
+        var ink = new Ink(font, StoragePaint.Well);
 
-        var verdicts = viewModel.CurrentBoxLegality;
+        var slots = scene.Slots;
+        var verdicts = scene.Verdicts;
 
         for (var index = 0; index < Columns * Rows; index++)
         {
-            var rect = SlotRect(info, index);
+            var cell = layout.Cell(index);
+            // Badges keep the square tile they were designed for, centered in the wide cell.
+            var tile = SKRect.Create(cell.MidX - layout.CellHeight / 2, cell.Top, layout.CellHeight, layout.CellHeight);
 
             var occupied = index < slots.Count && slots[index].Species is not null;
-            var isCarryOrigin = viewModel.CarrySource is { } source
-                && source.Box == viewModel.BoxIndex && source.Slot == index;
+            var isCarryOrigin = scene.CarryOrigin == index;
+            var selected = index == scene.Selected;
 
-            // Soft white slot on the wallpaper; a faint waiting ball when empty.
-            PksmPaint.Slot(canvas, rect, wallpaper, empty: !occupied);
+            if (selected) StoragePaint.CursorPool(canvas, cell, unit, marking ? Pksm.CursorGreen : null);
+            var lift = selected ? StoragePaint.CursorLift * unit : 0f;
 
-            var settling = hand is not null && hand.IsLandingOn(index);
+            var settling = hand is not null && hand.IsLandingOn(index, scene.Box);
             if (occupied && !settling)
             {
                 if (isCarryOrigin)
                 {
-                    // The lifted mon leaves a dashed gold ghost behind.
+                    // The lifted Pokémon leaves a faded ghost behind.
                     canvas.SaveLayer(GhostPaint);
-                    DrawSprite(canvas, rect, slots[index], sprites, invalidate, font, shadow, bdspStyle);
+                    DrawStanding(canvas, cell, unit, 0f, slots[index], sprites, invalidate, ink, bdspStyle);
                     canvas.Restore();
-                    PksmPaint.CarryGhost(canvas, rect);
                 }
                 else
                 {
-                    DrawSprite(canvas, rect, slots[index], sprites, invalidate, font, shadow, bdspStyle);
+                    DrawStanding(canvas, cell, unit, lift, slots[index], sprites, invalidate, ink, bdspStyle);
                 }
             }
 
-            if (viewModel.PendingRectangle is { } range && viewModel.InPendingRectangle(index))
-                PksmPaint.RangeWash(canvas, rect, range.Mark);
+            if (scene.RangeMark(index) is { } mark)
+                PksmPaint.RangeWash(canvas, SKRect.Inflate(cell, -4f * unit, -4f * unit), mark);
 
-            if (index == viewModel.SelectedSlot)
-            {
-                // The games' two hands: red moves one Pokémon, green marks many.
-                PksmPaint.Selection(canvas, rect, viewModel.SelectMode ? Pksm.CursorGreen : null);
-                if (hand is null && viewModel.CarriedSummary is { } carried && viewModel.CarrySource is not null)
-                {
-                    var lift = cell * 0.18f;
-                    DrawSprite(canvas, new SKRect(rect.Left, rect.Top - lift, rect.Right, rect.Bottom - lift),
-                        carried, sprites, invalidate, font, shadow, bdspStyle);
-                }
-            }
+            if (selected && hand is null && scene.Carried is { } carried)
+                DrawStanding(canvas, cell, unit, layout.CellHeight * 0.18f, carried, sprites, invalidate, ink, bdspStyle);
 
             if (occupied && !isCarryOrigin && slots[index].IsShiny)
-                DrawSparkle(canvas, rect.Right - rect.Width * 0.14f, rect.Top + rect.Height * 0.16f,
-                    Math.Min(rect.Width, rect.Height) * 0.09f, SparklePaint);
+                StoragePaint.ShinyStar(canvas, cell, star, unit);
 
             if (occupied && lockedSlots is not null && lockedSlots.Contains(index))
-                DrawLockBadge(canvas, rect, Math.Min(rect.Width, rect.Height));
+                DrawLockBadge(canvas, tile, layout.CellHeight);
 
             if (occupied && !isCarryOrigin && slots[index].HasItem)
-                DrawHeldItemBadge(canvas, rect, besideLock: lockedSlots is not null && lockedSlots.Contains(index));
+                DrawHeldItemBadge(canvas, tile, besideLock: lockedSlots is not null && lockedSlots.Contains(index));
 
             if (occupied && verdicts is not null && verdicts.TryGetValue(index, out var legal))
-                DrawLegalityDot(canvas, rect, legal);
+                DrawLegalityDot(canvas, tile, legal);
 
-
-            if (viewModel.SelectMode && occupied && viewModel.IsMarked(viewModel.BoxIndex, index))
-                PksmPaint.MarkBadge(canvas, rect);
+            if (occupied && scene.IsMarked(index))
+                PksmPaint.MarkBadge(canvas, tile);
         }
 
-        // The Pokémon in hand glides from slot to slot under the move pointer.
-        if (hand is not null && (uint)viewModel.SelectedSlot < (uint)(Columns * Rows))
+        if ((uint)scene.Selected >= (uint)(Columns * Rows)) return;
+        var cursor = layout.Cell(scene.Selected);
+
+        // The Pokémon in hand glides from slot to slot under the pointer.
+        if (hand is not null)
         {
-            var cursor = SlotRect(info, viewModel.SelectedSlot);
-            var carrying = viewModel.CarriedSummary is not null && viewModel.CarrySource is not null;
-            var origin = viewModel.CarrySource is { } from && from.Box == viewModel.BoxIndex && (uint)from.Slot < (uint)(Columns * Rows)
-                ? SlotRect(info, from.Slot)
-                : cursor;
-            hand.Sync(carrying, origin, cursor, viewModel.SelectedSlot, viewModel.BoxIndex);
-            var held = viewModel.CarriedSummary;
-            if (hand.Draw(canvas, cell, (c, r) =>
-                {
-                    if (held is not null) DrawSprite(c, r, held, sprites, invalidate, font, shadow, bdspStyle);
-                }))
+            var carrying = scene.Carried is not null;
+            var origin = scene.CarryOrigin is { } from && (uint)from < (uint)(Columns * Rows) ? layout.Cell(from) : cursor;
+            hand.Sync(carrying, origin, cursor, scene.Selected, scene.Box);
+            var held = scene.Carried;
+            if (hand.Draw(canvas, layout.CellHeight,
+                    (c, r) => { if (held is not null) DrawStanding(c, r, unit, 0f, held, sprites, invalidate, ink, bdspStyle); },
+                    (c, r) => StoragePaint.Pointer(c, r, unit, marking)))
                 invalidate();
+            if (hand.Holding) return;
         }
+        StoragePaint.Pointer(canvas, cursor, unit, marking);
     }
+
+    /// <summary>What the no-sprite fallback writes with: the nickname or "#species".</summary>
+    private readonly record struct Ink(SKFont Font, SKColor Shadow);
 
     // The BDSP icons are 128 px renders drawn smaller: smooth sampling, unlike the pixel set.
     private static readonly SKSamplingOptions IconSampling = new(SKFilterMode.Linear, SKMipmapMode.Linear);
 
-    private static void DrawSprite(SKCanvas canvas, SKRect rect, Domain.SlotSummary slot,
-        ISpriteService sprites, Action invalidate, SKFont font, SKColor shadow, bool bdspStyle = false)
+    // The visible part of each Showdown icon, by sheet cell: a shiny's PKHeX sprite is fitted
+    // to it. Found once per icon; UI thread only.
+    private static readonly Dictionary<SKRectI, SKRectI> IconFootprints = [];
+
+    /// <summary>
+    /// Draws one Pokémon standing on the cell's ground line, <paramref name="lift"/> pixels up.
+    /// Order: the BDSP add-on icon (BDSP saves), the Showdown icon (a shiny wears PKHeX's shiny
+    /// art at the icon's size, or keeps the icon when no shiny art exists), then PKHeX's art for
+    /// eggs and forms Showdown does not draw. While an answer is loading nothing is drawn, so no
+    /// stand-in flashes first.
+    /// </summary>
+    private static void DrawStanding(SKCanvas canvas, SKRect cell, float unit, float lift, Domain.SlotSummary slot,
+        ISpriteService sprites, Action invalidate, Ink ink, bool bdspStyle)
     {
+        var look = slot.Look;
         if (bdspStyle)
         {
-            // Loading: draw nothing for a blink rather than flash the pixel sprite first.
-            if (!sprites.TryGetBdspIcon(slot.Look, invalidate, out var icon)) return;
+            if (!sprites.TryGetBdspIcon(look, invalidate, out var icon)) return;
             if (icon is not null)
             {
-                var edge = Math.Min(rect.Width, rect.Height);
-                var side = edge * 0.98f;
+                var side = Math.Min(cell.Width, cell.Height) * 0.98f;
                 var fit = side / Math.Max(icon.Width, icon.Height);
                 var iw = icon.Width * fit;
                 var ih = icon.Height * fit;
+                var bottom = cell.Bottom - lift;
                 using var iconImage = SKImage.FromBitmap(icon);
-                canvas.DrawImage(iconImage, new SKRect(rect.MidX - iw / 2, rect.MidY - ih / 2, rect.MidX + iw / 2, rect.MidY + ih / 2), IconSampling);
+                canvas.DrawImage(iconImage, new SKRect(cell.MidX - iw / 2, bottom - ih, cell.MidX + iw / 2, bottom), IconSampling);
                 return;
             }
         }
-        var bitmap = sprites.GetSprite(slot.Look);
-        if (bitmap is not null)
+
+        if (!slot.IsEgg)
         {
-            // The sprite fills ~94% of the tile - it IS the slot.
-            var inset = Math.Min(rect.Width, rect.Height) * 0.03f;
-            var box = SKRect.Inflate(rect, -inset, -inset);
-            var scale = Math.Min(box.Width / bitmap.Width, box.Height / bitmap.Height);
-            var w = bitmap.Width * scale;
-            var h = bitmap.Height * scale;
-            var dest = new SKRect(rect.MidX - w / 2, rect.MidY - h / 2, rect.MidX + w / 2, rect.MidY + h / 2);
-            // SKImage.FromBitmap wraps without copying; DrawImage is the Skia3 path with sampling control.
-            using var image = SKImage.FromBitmap(bitmap);
-            canvas.DrawImage(image, dest, SpriteSampling);
+            if (!sprites.TryGetShowdownIcon(look, invalidate, out var sheet, out var source)) return;
+            if (sheet is not null)
+            {
+                if (slot.IsShiny)
+                {
+                    if (!sprites.TryGetShinySprite(look, invalidate, out var shiny)) return;
+                    if (shiny is not null)
+                    {
+                        if (!IconFootprints.TryGetValue(source, out var visible))
+                            IconFootprints[source] = visible = StoragePaint.OpaqueBounds(sheet, source);
+                        var scale = StoragePaint.IconScale * unit;
+                        var footprint = new SKSize(visible.Width * scale, visible.Height * scale);
+                        using var shinyImage = SKImage.FromBitmap(shiny);
+                        canvas.DrawImage(shinyImage,
+                            StoragePaint.FootprintRect(cell, new SKSizeI(shiny.Width, shiny.Height), footprint, lift, unit), SpriteSampling);
+                        return;
+                    }
+                }
+                using var sheetImage = SKImage.FromBitmap(sheet);
+                canvas.DrawImage(sheetImage, SKRect.Create(source.Left, source.Top, source.Width, source.Height),
+                    StoragePaint.IconRect(cell, unit, lift), SpriteSampling, null);
+                return;
+            }
         }
-        else
+
+        var bitmap = sprites.GetSprite(look);
+        if (bitmap is null)
         {
             // invalidate is expected to be a coalescing, thread-safe repaint request.
-            sprites.Warm(slot.Look, invalidate);
-            PksmPaint.CenterText(canvas, slot.Nickname ?? $"#{slot.Species}", rect.MidX, rect.MidY,
-                font, SKColors.White, shadow, SKTextAlign.Center);
+            sprites.Warm(look, invalidate);
+            PksmPaint.CenterText(canvas, slot.Nickname ?? $"#{slot.Species}", cell.MidX, cell.MidY - lift,
+                ink.Font, ColorTheme.Current.Bright, ink.Shadow, SKTextAlign.Center);
+            return;
         }
+        // PKHeX's art fits a square tile and stands on the ground line with the icons.
+        var box = Math.Min(cell.Width, cell.Height) * 0.94f;
+        var fitScale = Math.Min(box / bitmap.Width, box / bitmap.Height);
+        var w = bitmap.Width * fitScale;
+        var h = bitmap.Height * fitScale;
+        var ground = cell.Bottom - 14f * unit - lift;
+        using var image = SKImage.FromBitmap(bitmap);
+        canvas.DrawImage(image, new SKRect(cell.MidX - w / 2, ground - h, cell.MidX + w / 2, ground), SpriteSampling);
     }
 
     private static SKBitmap? _lockIcon;

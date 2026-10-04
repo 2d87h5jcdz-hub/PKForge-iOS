@@ -17,23 +17,25 @@ public static class Kit
 {
     /// <summary>
     /// The page housing backdrop: the logo's crisp navy/cobalt grid.
-    /// Prerendered once per size — no per-frame paint storms.
+    /// Prerendered once per size and color theme — no per-frame paint storms.
     /// </summary>
     public static SKCanvasView DeviceBackground()
     {
         var canvasView = new SKCanvasView { InputTransparent = true };
         SKBitmap? prerendered = null;
         var prerenderedSize = new SKSizeI(-1, -1);
+        var prerenderedTheme = -1;
 
         canvasView.PaintSurface += (_, args) =>
         {
             var info = args.Info;
             if (info.Width <= 0 || info.Height <= 0) return;
-            if (prerendered is null || prerenderedSize != info.Size)
+            if (prerendered is null || prerenderedSize != info.Size || prerenderedTheme != ColorTheme.Version)
             {
                 prerendered?.Dispose();
                 prerendered = RenderBackdrop(info);
                 prerenderedSize = info.Size;
+                prerenderedTheme = ColorTheme.Version;
             }
             args.Surface.Canvas.DrawBitmap(prerendered, 0, 0);
         };
@@ -68,8 +70,13 @@ public static class Kit
     public static Shadow HardShadow() => FloatShadow;
 
     /// <summary>Navy body with the faint light along the top edge (the summary panel).</summary>
+    // The storage well's navy, a touch lighter at the top.
+    private static Color WellTop => PksmPaint.Mix(StoragePaint.Well, StoragePaint.FrameEdge, 0.25f).ToMauiColor();
+    private static Color WellBody => StoragePaint.Well.ToMauiColor();
+    private static Color WellRim => StoragePaint.FrameEdge.ToMauiColor();
+
     private static Brush PanelBrush() => new LinearGradientBrush(
-        [new GradientStop(UiTokens.PanelTop, 0f), new GradientStop(UiTokens.Paper, 0.09f)],
+        [new GradientStop(WellTop, 0f), new GradientStop(WellBody, 0.12f)],
         new Point(0, 0), new Point(0, 1));
 
     /// <summary>
@@ -79,9 +86,9 @@ public static class Kit
     public static Border Panel(View content, double padding = 12) => new()
     {
         Background = PanelBrush(),
-        Stroke = UiTokens.ShellEdge,
+        Stroke = WellRim,
         StrokeThickness = UiTokens.PanelEdge,
-        StrokeShape = new RoundRectangle { CornerRadius = UiTokens.PanelRadius },
+        StrokeShape = new RoundRectangle { CornerRadius = 12 },
         Shadow = FloatShadow,
         Padding = padding,
         Content = content,
@@ -455,23 +462,68 @@ public static class Kit
         Padding = 0,
     };
 
-    /// <summary>A round cyan key disc (footer glyph button: A, B, X, LR ...).</summary>
+    // The designer's drawn keys, by footer glyph; the others keep the drawn disc.
+    private static readonly Dictionary<string, string> KeyArt = new()
+    {
+        ["A"] = "key_a", ["B"] = "key_b", ["X"] = "key_x", ["Y"] = "key_y",
+        ["L"] = "key_l", ["R"] = "key_r", ["LR"] = "key_lr",
+        ["+"] = "key_plus", ["-"] = "key_minus", ["−"] = "key_minus",
+    };
+
+    private static readonly Dictionary<string, SKImage?> KeyImages = new();
+
+    private static SKImage? KeyImage(string name)
+    {
+        if (KeyImages.TryGetValue(name, out var image)) return image;
+        try
+        {
+            using var stream = FileSystem.OpenAppPackageFileAsync($"ui/design/{name}.png").GetAwaiter().GetResult();
+            using var bitmap = SKBitmap.Decode(stream);
+            image = bitmap is null ? null : SKImage.FromBitmap(bitmap);
+        }
+        catch (Exception error) when (error is IOException or FileNotFoundException) { image = null; }
+        KeyImages[name] = image;
+        return image;
+    }
+
+    /// <summary>
+    /// A footer key: the designer's pixel button tinted cyan for the console's buttons, and a
+    /// round cyan disc with the glyph for the rest (TAP, ↑↓ ...).
+    /// </summary>
     public static Border GlyphKey(string glyph, Action? onTap = null)
     {
+        View face;
+        if (KeyArt.TryGetValue(glyph, out var art) && KeyImage(art) is { } image)
+        {
+            var canvas = new SKCanvasView { InputTransparent = true };
+            canvas.PaintSurface += (_, args) =>
+            {
+                var c = args.Surface.Canvas;
+                c.Clear(SKColors.Transparent);
+                using var tint = new SKPaint { ColorFilter = SKColorFilter.CreateBlendMode(UiTokens.BagCyanEdge.ToSKColor(), SKBlendMode.SrcIn) };
+                var side = Math.Min(args.Info.Width, args.Info.Height);
+                var dest = SKRect.Create((args.Info.Width - side) / 2f, (args.Info.Height - side) / 2f, side, side);
+                c.DrawImage(image, dest, new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None), tint);
+            };
+            face = canvas;
+        }
+        else face = new Label
+        {
+            Text = glyph, FontFamily = DsChrome.PixelFont, TextColor = UiTokens.OnAccent, FontSize = UiTokens.TextLabel,
+            VerticalTextAlignment = TextAlignment.Center, HorizontalTextAlignment = TextAlignment.Center,
+        };
+        var drawn = face is SKCanvasView;
         var key = new Border
         {
             StrokeThickness = 0,
             StrokeShape = new RoundRectangle { CornerRadius = 11 },
-            BackgroundColor = UiTokens.BagCyanEdge,
-            Padding = new Thickness(glyph.Length > 1 ? 7 : 0, 0),
+            BackgroundColor = drawn ? Colors.Transparent : UiTokens.BagCyanEdge,
+            Padding = new Thickness(!drawn && glyph.Length > 1 ? 7 : 0, 0),
             MinimumWidthRequest = 22,
+            WidthRequest = drawn ? 22 : -1,
             HeightRequest = 22,
             VerticalOptions = LayoutOptions.Center,
-            Content = new Label
-            {
-                Text = glyph, FontFamily = DsChrome.PixelFont, TextColor = UiTokens.OnAccent, FontSize = UiTokens.TextLabel,
-                VerticalTextAlignment = TextAlignment.Center, HorizontalTextAlignment = TextAlignment.Center,
-            },
+            Content = face,
         };
         if (onTap is not null)
         {
@@ -511,14 +563,14 @@ public static class Kit
             : new LinearGradientBrush([new GradientStop(UiTokens.ButtonTop, 0), new GradientStop(UiTokens.ButtonBottom, 1)], new Point(0, 0), new Point(0, 1));
         tab.Stroke = active ? UiTokens.Rim : UiTokens.ButtonEdge;
         tab.StrokeThickness = active ? 1.2 : UiTokens.ControlEdge;
-        if (tab.Content is Label label) label.TextColor = active ? Colors.White : UiTokens.InkSoft;
+        if (tab.Content is Label label) label.TextColor = active ? UiTokens.Bright : UiTokens.InkSoft;
     }
 
     /// <summary>A blinky device indicator light (static for now; animation comes later).</summary>
     public static Ellipse StatusLight(Color color, double size = 12) => new()
     {
         Fill = new SolidColorBrush(color),
-        Stroke = new SolidColorBrush(Colors.White.WithAlpha(0.55f)),
+        Stroke = new SolidColorBrush(UiTokens.Bright.WithAlpha(0.55f)),
         StrokeThickness = 1.5,
         WidthRequest = size,
         HeightRequest = size,
@@ -541,21 +593,22 @@ public static class Kit
     /// </summary>
     public static View HeaderBar(string title, Color? accent = null)
     {
-        var body = accent ?? UiTokens.AccentNeutral;
+        // The banner of the art direction (the box name, the editor's name tab): a blue
+        // gradient under a white rim. An accent tints it instead.
+        var top = accent is { } tint ? tint.WithLuminosity(Math.Min(1, tint.GetLuminosity() + 0.12f)) : StoragePaint.BannerTop.ToMauiColor();
+        var bottom = accent is { } shade ? shade.WithLuminosity(Math.Max(0, shade.GetLuminosity() - 0.08f)) : StoragePaint.BannerBottom.ToMauiColor();
         return new Border
         {
-            Background = new LinearGradientBrush(
-                [new GradientStop(body.WithLuminosity(Math.Min(1, body.GetLuminosity() + 0.08f)), 0f), new GradientStop(body.WithLuminosity(Math.Max(0, body.GetLuminosity() - 0.04f)), 1f)],
-                new Point(0, 0), new Point(0, 1)),
-            Stroke = UiTokens.Outline,
-            StrokeThickness = UiTokens.ControlEdge,
-            StrokeShape = new RoundRectangle { CornerRadius = UiTokens.ControlRadius },
+            Background = new LinearGradientBrush([new GradientStop(top, 0f), new GradientStop(bottom, 1f)], new Point(0, 0), new Point(0, 1)),
+            Stroke = Pksm.Ink.ToMauiColor(),
+            StrokeThickness = 1.5,
+            StrokeShape = new RoundRectangle { CornerRadius = new CornerRadius(10, 3, 10, 3) },
             Padding = new Thickness(10, 5),
             HorizontalOptions = LayoutOptions.Fill,
             Content = new Label
             {
                 Text = title,
-                TextColor = Colors.White,
+                TextColor = UiTokens.Bright,
                 FontFamily = DsChrome.PixelFont,
                 FontSize = UiTokens.TextTitle + 1,
                 VerticalTextAlignment = TextAlignment.Center,

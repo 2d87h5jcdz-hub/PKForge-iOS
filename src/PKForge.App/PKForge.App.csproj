@@ -10,8 +10,8 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ApplicationId>org.pkforge.app</ApplicationId>
     <ApplicationTitle>PKForge</ApplicationTitle>
-    <ApplicationVersion>303</ApplicationVersion>
-    <ApplicationDisplayVersion>3.0.3</ApplicationDisplayVersion>
+    <ApplicationVersion>310</ApplicationVersion>
+    <ApplicationDisplayVersion>3.1.0</ApplicationDisplayVersion>
     <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
   </PropertyGroup>
   <PropertyGroup Condition="'$(DiagnosticBuild)' == 'true'">
@@ -43,11 +43,19 @@
     <!-- Bundled fallback sprites from pristine PKHeX submodule (always offline-available). -->
     <MauiAsset Include="Resources/UI/dex/*.bin.gz" LogicalName="dex/%(Filename)%(Extension)" />
     <MauiAsset Include="Resources/AppIcon/pkforge.png" LogicalName="ui/logo.png" />
+    <!-- The logo in each color scheme's colors, named by scheme id. -->
+    <MauiAsset Include="Resources/UI/logo/*.png" LogicalName="ui/logo/%(Filename)%(Extension)" />
+    <!-- The About screen's easter egg. -->
+    <MauiAsset Include="Resources/BadApple/*" LogicalName="badapple/%(Filename)%(Extension)" />
     <MauiAsset Include="Resources/Events/*.bin.gz" LogicalName="events/%(Filename)%(Extension)" />
     <MauiAsset Include="../../external/PKHeX/PKHeX.Drawing.PokeSprite/Resources/img/Big Pokemon Sprites/*.png" LogicalName="sprites/%(Filename)%(Extension)" />
     <MauiAsset Include="../../external/PKHeX/PKHeX.Drawing.PokeSprite/Resources/img/Big Shiny Sprites/*.png" LogicalName="sprites/%(Filename)%(Extension)" />
     <!-- Luminescent Platinum's custom form icons (Team Lumi; see Resources/UI/ATTRIBUTION.md). -->
     <MauiAsset Include="Resources/UI/lumi/*.png" LogicalName="sprites/lumi/%(Filename)%(Extension)" />
+    <!-- Pokémon Showdown sprites (Smogon). -->
+    <MauiAsset Include="Resources/Showdown/icons.png" LogicalName="showdown/icons.png" />
+    <MauiAsset Include="Resources/Showdown/front/*.png" LogicalName="showdown/front/%(Filename)%(Extension)" />
+    <MauiAsset Include="Resources/Showdown/front-shiny/*.png" LogicalName="showdown/front-shiny/%(Filename)%(Extension)" />
     <!-- PKHeX ships no pixel sprites past species 905 (Legends: Arceus); for Gen 9 it
          displays official artwork. Bundle that artwork block (base + forms, ~1MB) as
          the offline Gen 9 fallback, exactly what PKHeX itself shows. -->
@@ -72,6 +80,8 @@
     <MauiAsset Include="Resources/GameLogo/*.png" LogicalName="gamelogo/%(Filename)%(Extension)" />
     <!-- PKSM-derived pixel chrome (GPL-3, see Resources/UI/ATTRIBUTION.md). -->
     <MauiAsset Include="Resources/UI/pksm/*.png" LogicalName="ui/pksm/%(Filename)%(Extension)" />
+    <!-- The designer's icons for the new art direction (summary tabs, footer buttons). -->
+    <MauiAsset Include="Resources/UI/design/*.png" LogicalName="ui/design/%(Filename)%(Extension)" />
     <!-- MPWSP01 environment art by Scarloxy; attribution in docs/POKEPARK_MPWSP01.md. -->
     <MauiAsset Include="Resources/Pokepark/Maps/*.png" LogicalName="pokepark/maps/%(Filename)%(Extension)" />
   </ItemGroup>

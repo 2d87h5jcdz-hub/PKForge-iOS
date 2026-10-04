@@ -39,7 +39,7 @@ public sealed class DialogueBox : IPadHandler
 
         _text = new Label
         {
-            FontFamily = DsChrome.PixelFont, FontSize = 16, TextColor = Colors.White,
+            FontFamily = DsChrome.PixelFont, FontSize = 16, TextColor = UiTokens.Bright,
             LineBreakMode = LineBreakMode.WordWrap, VerticalOptions = LayoutOptions.Start,
         };
         _more = AdvanceArrow();

@@ -116,18 +116,18 @@ public sealed class UnboundSessionTests
     }
 
     [Fact]
-    public void BoxToPartyRoundTripsThroughPk3()
+    public void BoxToPartyRoundTripsThroughTheBankFormat()
     {
         var session = OpenGroundTruth();
         if (session is null) return;
         session.MoveSlot(-1, 0, 5, 3);
         var export = session.ExportSlot(5, 3);
-        Assert.EndsWith(".pk3", export.FileName);
+        Assert.EndsWith(".pk3ub", export.FileName);
 
         var second = OpenGroundTruth();
         if (second is null) return;
         Assert.False(second.ImportSlot(2, 7, new byte[8])); // garbage never imports
-        Assert.True(second.ImportSlot(2, 7, export.Data));
+        Assert.True(second.ImportSlot(2, 7, export.Data, export.Format));
         var imported = second.ReadEntity(2, 7);
         Assert.Equal(246, imported.Species);
         Assert.Equal("Larvitar", imported.Nickname);

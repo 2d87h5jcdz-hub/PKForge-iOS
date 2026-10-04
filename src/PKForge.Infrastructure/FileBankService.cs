@@ -61,6 +61,64 @@ public sealed class FileBankService : IBankService
         }
     }
 
+    public IReadOnlyList<BankEntry> AddMany(IReadOnlyList<BankDeposit> deposits)
+    {
+        lock (_gate)
+        {
+            if (deposits.Count == 0) return [];
+            EnsureWritable();
+
+            // Every chosen slot is checked before a byte is written: a rejected batch changes nothing.
+            var occupied = _entries.Select(e => (e.Box, e.Slot)).ToHashSet();
+            foreach (var deposit in deposits.Where(d => d.Box >= 0 || d.Slot >= 0))
+            {
+                if (deposit.Box < 0 || deposit.Slot < 0 || deposit.Slot >= SlotsPerBox)
+                    throw new ArgumentOutOfRangeException(nameof(deposits), "Box or slot out of range.");
+                if (!occupied.Add((deposit.Box, deposit.Slot)))
+                    throw new InvalidOperationException("A deposit's slot is already taken.");
+            }
+
+            var written = new List<Guid>(deposits.Count);
+            try
+            {
+                return Commit(() =>
+                {
+                    var added = new List<BankEntry>(deposits.Count);
+                    var (box, slot) = (0, 0);
+                    foreach (var deposit in deposits)
+                    {
+                        var at = (deposit.Box, deposit.Slot);
+                        if (deposit.Box < 0)
+                        {
+                            // The free-slot scan resumes where the previous deposit landed.
+                            while (occupied.Contains((box, slot)))
+                                (box, slot) = slot + 1 == SlotsPerBox ? (box + 1, 0) : (box, slot + 1);
+                            occupied.Add((box, slot));
+                            at = (box, slot);
+                        }
+                        var entry = new BankEntry(Guid.NewGuid(), at.Box, at.Slot, deposit.Info, DateTimeOffset.UtcNow);
+                        written.Add(entry.Id);
+                        File.WriteAllBytes(DataPath(entry.Id), deposit.Data);
+                        _entries.Add(entry);
+                        _boxCount = Math.Max(_boxCount, at.Box + 1);
+                        added.Add(entry);
+                    }
+                    SaveIndex();
+                    return added;
+                });
+            }
+            catch
+            {
+                foreach (var id in written)
+                {
+                    try { File.Delete(DataPath(id)); }
+                    catch { /* an orphan .bin is harmless: the index never lists it */ }
+                }
+                throw;
+            }
+        }
+    }
+
     public byte[] GetData(Guid id)
     {
         lock (_gate)

@@ -9,6 +9,8 @@ namespace PKForge.Engine;
 public sealed class SaveEngineSession : ISaveEngineSession
 {
     private readonly SaveFile _save;
+    static SaveEngineSession() => LegalityRules.Apply();
+
     private readonly byte[] _originalBytes;
     private readonly string? _displayName;
     private bool _disposed;
@@ -24,6 +26,20 @@ public sealed class SaveEngineSession : ISaveEngineSession
         _save = save;
         _displayName = displayName;
         SaveParser.ApplyVersionHint(_save, displayName);
+    }
+
+    /// <summary>
+    /// PKHeX's own save-load step (PKHeX.WinForms: ParseSettings.InitFromSaveFileData): a Game
+    /// Boy cartridge save allows the GB-era events (PCNY eggs, Pokémon Stadium gifts), which the
+    /// 3DS Virtual Console rules used for every later save exclude. The era is process-wide, so
+    /// only the save the player opens sets it, never the other saves a transfer or the Bank
+    /// reads. PKHeX's active-trainer handler checks are not taken on.
+    /// </summary>
+    public void MakeActive()
+    {
+        ThrowIfDisposed();
+        ParseSettings.InitFromSaveFileData(_save);
+        ParseSettings.ClearActiveTrainer();
     }
 
     /// <summary>
@@ -149,8 +165,7 @@ public sealed class SaveEngineSession : ISaveEngineSession
         }
         if (edit.Nickname is { } nickname && !string.Equals(entity.Nickname, nickname, StringComparison.Ordinal))
         {
-            entity.Nickname = nickname;
-            entity.IsNicknamed = true;
+            entity.SetNickname(nickname);
             changed = true;
         }
         if (edit.Level is { } level && entity.CurrentLevel != Math.Clamp(level, 1, 100))
@@ -219,10 +234,10 @@ public sealed class SaveEngineSession : ISaveEngineSession
             entity.HeldItem = item;
             changed = true;
         }
-        if (edit.Move1 is { } m1 && entity.Move1 != m1) { entity.Move1 = (ushort)m1; changed = true; }
-        if (edit.Move2 is { } m2 && entity.Move2 != m2) { entity.Move2 = (ushort)m2; changed = true; }
-        if (edit.Move3 is { } m3 && entity.Move3 != m3) { entity.Move3 = (ushort)m3; changed = true; }
-        if (edit.Move4 is { } m4 && entity.Move4 != m4) { entity.Move4 = (ushort)m4; changed = true; }
+        if (edit.Move1 is { } m1 && entity.Move1 != m1) { SetMoveFresh(entity, 0, m1); changed = true; }
+        if (edit.Move2 is { } m2 && entity.Move2 != m2) { SetMoveFresh(entity, 1, m2); changed = true; }
+        if (edit.Move3 is { } m3 && entity.Move3 != m3) { SetMoveFresh(entity, 2, m3); changed = true; }
+        if (edit.Move4 is { } m4 && entity.Move4 != m4) { SetMoveFresh(entity, 3, m4); changed = true; }
         if (edit.IVs is { Count: 6 } ivs)
         {
             var values = ClampAll(ivs.ToArray(), TrainingCapsOf(entity).IvMax);
@@ -253,7 +268,7 @@ public sealed class SaveEngineSession : ISaveEngineSession
         }
         if (edit.OriginalTrainer is { } ot && !string.Equals(entity.OriginalTrainerName, ot, StringComparison.Ordinal))
         {
-            entity.OriginalTrainerName = ot;
+            SetOriginalTrainerName(entity, ot, _save);
             changed = true;
         }
         if (edit.Gender is { } gender && entity.Gender != Math.Clamp(gender, 0, 2))
@@ -557,15 +572,20 @@ public sealed class SaveEngineSession : ISaveEngineSession
 
         if (fromBox == -1 && toBox == -1)
         {
-            // Reorder inside the party: remove at the source, insert at the target
-            // (occupied target = swap feel, empty target = move there). Works for any
-            // target index 0-5, no out-of-range possible on a compacted party.
+            // Reorder inside the party as the games do: onto a Pokémon, the two swap; onto an
+            // empty slot, the Pokémon moves to the end, so the party stays packed.
             var party = _save.PartyData.ToList();
             if ((uint)fromSlot >= party.Count) return;
-            var moving = party[fromSlot];
-            party.RemoveAt(fromSlot);
-            toSlot = Math.Min(toSlot, party.Count);
-            party.Insert(toSlot, moving);
+            if (toSlot < party.Count)
+            {
+                (party[fromSlot], party[toSlot]) = (party[toSlot], party[fromSlot]);
+            }
+            else
+            {
+                var moving = party[fromSlot];
+                party.RemoveAt(fromSlot);
+                party.Add(moving);
+            }
             WriteParty(party);
             return;
         }
@@ -689,7 +709,7 @@ public sealed class SaveEngineSession : ISaveEngineSession
                 if (mon.Species != 0) mons.Add(mon.Clone());
             }
 
-        int TypeRank(PKM mon) => mon.PersonalInfo.Type1; // dex type order runs types 0..17
+        int TypeRank(PKM mon) => PersonalTypes.First(mon.PersonalInfo); // dex type order runs types 0..17
         int MetAge(PKM mon) => mon.MetDate?.DayNumber is { } day ? int.MaxValue - Math.Min(day, int.MaxValue - 1) : int.MaxValue;
 
         mons = criteria switch
@@ -877,12 +897,11 @@ public sealed class SaveEngineSession : ISaveEngineSession
                     break;
                 }
                 case "nickname":
-                    entity.Nickname = value;
-                    entity.IsNicknamed = value.Length > 0;
+                    entity.SetNickname(value);
                     changed = true;
                     break;
                 case "ot" or "trainer":
-                    entity.OriginalTrainerName = value;
+                    SetOriginalTrainerName(entity, value);
                     changed = true;
                     break;
             }
@@ -1206,6 +1225,12 @@ public sealed class SaveEngineSession : ISaveEngineSession
         SetDexFlagsCore(id, seen, caught);
     }
 
+    public bool IsDexSpecies(int species)
+    {
+        ThrowIfDisposed();
+        return species >= 1 && species <= _save.MaxSpeciesID && _save.Personal.IsSpeciesInGame((ushort)species);
+    }
+
     /// <summary>Dex setters only exist on SaveFile for Gen 1/2/3/6 — every other
     /// generation writes its Zukan block directly or the edit silently no-ops.</summary>
     private void SetDexFlagsCore(ushort species, bool seen, bool caught)
@@ -1230,6 +1255,29 @@ public sealed class SaveEngineSession : ISaveEngineSession
             case SAV7 { Zukan: { } z7 }:
                 z7.SetSeen(species, seen);
                 z7.SetCaught(species, caught);
+                return;
+            // Let's Go is not a SAV7 (both derive from SAV_BEEF), but its Zukan7b is a Zukan7.
+            case SAV7b { Zukan: { } z7b }:
+                z7b.SetSeen(species, seen);
+                z7b.SetCaught(species, caught);
+                return;
+            case SAV8LA la:
+                SetDexFlagsLegendsArceus(la, species, seen, caught);
+                return;
+            case SAV9ZA { Zukan: { } z9a }:
+                // Like Zukan9a.CompleteDex: species the game lacks have no entry to set.
+                if (!_save.Personal.IsSpeciesInGame(species)) return;
+                if (!seen)
+                {
+                    z9a.ClearDexEntryAll(species);
+                }
+                else
+                {
+                    // Zukan9a only sets seen and caught together; a seen-only entry drops the
+                    // caught forms (and the language/display data that goes with them) after.
+                    z9a.SetDexEntryAll(species);
+                    if (!caught) z9a.GetEntry(species).ClearCaught();
+                }
                 return;
             case SAV4 { Dex: { } z4 }:
                 z4.SetSeen(species, seen);
@@ -1257,8 +1305,10 @@ public sealed class SaveEngineSession : ISaveEngineSession
                 }
                 else if (z9.GetRevision() == (int)DexBlockMode9.Kitakami)
                 {
-                    // 2.0+ saves only expose the combined entry API.
+                    // 2.0+ saves only expose the combined entry API, which also marks the
+                    // species caught; drop the obtained forms again for a seen-only entry.
                     z9.SetDexEntryAll(species);
+                    z9.DexKitakami.Get(species).ClearCaught();
                 }
                 else
                 {
@@ -1272,6 +1322,38 @@ public sealed class SaveEngineSession : ISaveEngineSession
                 _save.SetSeen(species, seen);
                 _save.SetCaught(species, caught);
                 return;
+        }
+    }
+
+    /// <summary>Legends: Arceus reads "seen" from the research entry's updated flag and
+    /// "caught" from any form's obtain flags. The updated flag has no public clear (PKHeX's
+    /// own editor can't unset it either), so an entry once seen stays seen.</summary>
+    private static void SetDexFlagsLegendsArceus(SAV8LA save, ushort species, bool seen, bool caught)
+    {
+        var dex = save.PokedexSave;
+        // Species outside the Hisui dex have no statistics entries; touching their research
+        // entry would only leave a "seen" mark the game never shows.
+        if (!PersonalTable.LA.IsSpeciesInGame(species)) return;
+        if (seen || caught) dex.SetPokeHasBeenUpdated(species);
+
+        if (!caught)
+        {
+            var count = PersonalTable.LA[species].FormCount;
+            for (byte form = 0; form < count; form++)
+                if (dex.HasAnyPokeObtainFlags(species, form)) dex.SetPokeObtainFlags(species, form, 0);
+            return;
+        }
+        if (save.GetCaught(species)) return;
+
+        // One obtain bit on the first form Hisui has (Growlithe's is form 1): plain
+        // (non-shiny, non-alpha), first gender the species has (bit 0 male/genderless, bit 1 female).
+        var forms = PersonalTable.LA[species].FormCount;
+        for (byte form = 0; form < forms; form++)
+        {
+            var info = PersonalTable.LA[species, form];
+            if (!info.IsPresentInGame) continue;
+            dex.SetPokeObtainFlags(species, form, info.OnlyFemale ? (byte)2 : (byte)1);
+            return;
         }
     }
 
@@ -1454,6 +1536,8 @@ public sealed class SaveEngineSession : ISaveEngineSession
     public void SetTrainer(TrainerInfo trainer)
     {
         ThrowIfDisposed();
+        if (_save is SAV3 sav3 && !string.Equals(_save.OT, trainer.Name, StringComparison.Ordinal))
+            PrefillTrainerName3(sav3.SmallBlock.OriginalTrainerTrash, sav3.Japanese);
         _save.OT = trainer.Name;
         if (!string.Equals(_save.OT, trainer.Name, StringComparison.Ordinal))
             throw new InvalidOperationException("This save's character set cannot store that trainer name.");
@@ -1508,7 +1592,7 @@ public sealed class SaveEngineSession : ISaveEngineSession
         }
 
         var wasShiny = entity.IsShiny;
-        entity.OriginalTrainerName = profile?.OriginalTrainer ?? _save.OT;
+        SetOriginalTrainerName(entity, profile?.OriginalTrainer ?? _save.OT, _save);
         entity.TID16 = (ushort)Math.Clamp(profile?.TID ?? _save.TID16, 0, ushort.MaxValue);
         entity.SID16 = entity.Format < 3 || entity.VC
             ? (ushort)0
@@ -1524,7 +1608,7 @@ public sealed class SaveEngineSession : ISaveEngineSession
         entity.SetHandlerAndMemory(ownerInfo, before.EncounterOriginal);
         // Handler repair follows PKHeX transfer rules (VC entities cannot store a SID,
         // for example); ownership is reapplied within those format limits.
-        entity.OriginalTrainerName = ownerInfo.OT;
+        SetOriginalTrainerName(entity, ownerInfo.OT, _save);
         entity.TID16 = ownerInfo.TID16;
         entity.SID16 = entity.Format < 3 || entity.VC ? (ushort)0 : ownerInfo.SID16;
         entity.OriginalTrainerGender = ownerInfo.Gender;
@@ -1548,6 +1632,34 @@ public sealed class SaveEngineSession : ISaveEngineSession
             return false;
         }
         return true;
+    }
+
+    /// <summary>Writes an OT name the way a Gen 3 Pokémon gets one. The games copy the save's
+    /// name buffer byte for byte, and the naming screen pre-fills that buffer with terminators
+    /// (Japanese: 5 characters and a terminator, the alignment bytes stay zero). A plain
+    /// overwrite keeps the old name's tail after the new terminator, which PKHeX rightly flags
+    /// as "Final terminator missing". Other formats have no such buffer rule.</summary>
+    internal static void SetOriginalTrainerName(PKM entity, string name, SaveFile? owner = null)
+    {
+        if (entity is PK3 pk3)
+        {
+            var trash = pk3.OriginalTrainerTrash;
+            if (owner is SAV3 sav3 && sav3.Japanese == pk3.Japanese && string.Equals(sav3.OT, name, StringComparison.Ordinal))
+            {
+                sav3.SmallBlock.OriginalTrainerTrash[..trash.Length].CopyTo(trash);
+                return;
+            }
+            PrefillTrainerName3(trash, pk3.Japanese);
+        }
+        entity.OriginalTrainerName = name;
+    }
+
+    /// <summary>The Gen 3 naming screen's buffer before a name is written: terminators for
+    /// every character the language allows plus one, zero beyond.</summary>
+    private static void PrefillTrainerName3(Span<byte> buffer, bool japanese)
+    {
+        buffer.Clear();
+        buffer[..Math.Min(buffer.Length, japanese ? 6 : 8)].Fill(StringConverter3.TerminatorByte);
     }
 
     /// <summary>Mirrors PKHeX's trainer-name verifier: fixed-OT trades, event gifts,
@@ -1790,14 +1902,38 @@ public sealed class SaveEngineSession : ISaveEngineSession
 
     // ── Fashion ────────────────────────────────────────────────────────────
 
-    public bool SupportsLegalFashionUnlock => _save is SAV8SWSH;
+    public bool SupportsLegalFashionUnlock => _save is SAV8SWSH or SAV6XY;
 
     public void UnlockAllLegalFashion()
     {
         ThrowIfDisposed();
-        if (_save is not SAV8SWSH save)
-            throw new NotSupportedException("Legal wardrobe unlocks are currently supported for Pokémon Sword and Shield only.");
-        save.Fashion.UnlockAllLegal();
+        switch (_save)
+        {
+            case SAV8SWSH swsh: swsh.Fashion.UnlockAllLegal(); break;
+            // PKHeX's X/Y routine writes the fixed "everything owned" pattern, which keeps
+            // the unused and unobtainable bits clear.
+            case SAV6XY xy: xy.Fashion.UnlockAllAccessories(); break;
+            default: throw new NotSupportedException("Legal wardrobe unlocks are supported for Pokémon X, Y, Sword and Shield only.");
+        }
+    }
+
+    /// <summary>The X/Y Style field is one byte; PKHeX's trainer editor accepts 0-255.</summary>
+    public const int MaxStylePoints = byte.MaxValue;
+
+    public bool SupportsStylePoints => _save is SAV6XY;
+
+    public int GetStylePoints()
+    {
+        ThrowIfDisposed();
+        return _save is SAV6XY xy ? xy.Situation.Style : 0;
+    }
+
+    public void SetStylePoints(int value)
+    {
+        ThrowIfDisposed();
+        if (_save is not SAV6XY xy)
+            throw new NotSupportedException("Style points exist in Pokémon X and Y only.");
+        xy.Situation.Style = Math.Clamp(value, 0, MaxStylePoints);
     }
 
     // ── Mystery Gift inbox ────────────────────────────────────────────────
@@ -2303,6 +2439,25 @@ public sealed class SaveEngineSession : ISaveEngineSession
         SetEntityCore(box, slot, e);
     }
 
+    /// <summary>
+    /// Writes a move the way the games teach one: the slot starts with no PP Ups and full
+    /// PP for that move in the entity's own generation (Recover is 20 PP in Gen 3, 5 in
+    /// Gen 9). Keeping the old move's PP behind flags a boxed Pokémon whose PP must be
+    /// healed ("PP should be 20"), and a newly filled slot would sit at 0 PP.
+    /// </summary>
+    private static void SetMoveFresh(PKM e, int index, int move)
+    {
+        var id = (ushort)move;
+        var pp = id == 0 ? 0 : e.GetMovePP(id, 0);
+        switch (index)
+        {
+            case 0: e.Move1 = id; e.Move1_PPUps = 0; e.Move1_PP = pp; break;
+            case 1: e.Move2 = id; e.Move2_PPUps = 0; e.Move2_PP = pp; break;
+            case 2: e.Move3 = id; e.Move3_PPUps = 0; e.Move3_PP = pp; break;
+            default: e.Move4 = id; e.Move4_PPUps = 0; e.Move4_PP = pp; break;
+        }
+    }
+
     private static void SetPPUps(PKM e, IReadOnlyList<int> values)
     {
         var ups = values.Select(value => Math.Clamp(value, 0, 3)).ToArray();
@@ -2522,8 +2677,7 @@ public sealed class SaveEngineSession : ISaveEngineSession
 
     private int[] GetTypes(ushort species, byte form)
     {
-        var personal = _save.Personal.GetFormEntry(species, form);
-        return personal.Type1 == personal.Type2 ? [personal.Type1] : [personal.Type1, personal.Type2];
+        return PersonalTypes.Of(_save.Personal.GetFormEntry(species, form));
     }
 
     public ReadOnlyMemory<byte> Serialize()
@@ -2653,7 +2807,7 @@ public sealed class LegalityService : ILegalityService
         var analysis = new LegalityAnalysis(engineSession.GetEntity(box, slot));
         var report = analysis.Report(verbose: false);
         var lines = report.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return new LegalityReport(analysis.Valid, lines.Length == 0 ? ["No findings."] : lines);
+        return new LegalityReport(analysis.Valid, lines.Length == 0 ? ["No findings."] : lines, LegalityChecks.Group(analysis));
     }
 
     public IReadOnlyList<SlotLegality> Sweep(ISaveEngineSession session,
@@ -2677,7 +2831,7 @@ public sealed class LegalityService : ILegalityService
             results.Add(new SlotLegality(
                 summary.Box, summary.Slot, report.Valid,
                 report.Valid ? string.Empty : report.Lines.FirstOrDefault() ?? "Illegal.",
-                report.Lines));
+                report.Lines, report.Checks));
             onProgress?.Invoke(i + 1, occupied.Count);
         }
         return results;

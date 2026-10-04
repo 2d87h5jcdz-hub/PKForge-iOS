@@ -1,13 +1,13 @@
 using PKForge.Domain;
 using PKForge.Engine;
-using PKHeX.Core;
 
 namespace PKForge.App.Services;
 
 /// <summary>
 /// The vault's facts that its index does not carry, for the organizer's filters: species names
 /// from the engine's tables, canonical typings from the shared park catalog, and the egg, gender and ball
-/// read straight from the stored bytes with PKHeX's own entity parser - in-process and offline,
+/// read straight from the stored bytes with PKHeX's own entity parser (a ROM hack's record
+/// through its own game's tables) - in-process and offline,
 /// exactly how <see cref="HabitatCatalog"/> reads typings. Stored facts are probed once per entry
 /// and kept for the lifetime of the view asking.
 /// </summary>
@@ -66,11 +66,11 @@ public sealed class BankFacts(IBankService bank, IGameDataService data) : IBankF
         var stored = new Stored(false, 2, 0, 0);
         try
         {
-            if (EntityBytes.Parse(entry, bank.GetData(entry.Id)) is { } pk)
+            if (EntityBytes.StoredFacts(entry, bank.GetData(entry.Id)) is { } facts)
                 {
-                stored = new Stored(pk.IsEgg, pk.Gender, pk.Ball, pk.HeldItem);
+                stored = new Stored(facts.IsEgg, facts.Gender, facts.Ball, facts.HeldItem);
                 if (entry.Info.HeldItem is null)
-                    lock (_backfill) _backfill[entry.Id] = pk.HeldItem;
+                    lock (_backfill) _backfill[entry.Id] = facts.HeldItem;
             }
         }
         catch (IOException) { /* an unreadable file carries no facts */ }

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using PKForge.Domain;
+using PKForge.Engine.RadicalRed;
 using PKHeX.Core;
 using static PKForge.Engine.Unbound.UnboundFormat;
 
@@ -23,6 +24,7 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
     private bool _disposed;
 
     public const int Boxes = 25; // 0-18 stream, 19-23 fragmented, 24 preset
+    public const string SnapshotTag = "UNBOUND";
 
     public UnboundEngineSession(ReadOnlyMemory<byte> bytes, string? displayName = null)
     {
@@ -251,11 +253,14 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
         }
     }
 
+    /// <summary>Where the party tail keeps each stat, in app order: Spe sits before SpA and SpD.</summary>
+    private static readonly int[] PartyStatOffsets = [0x58, 0x5A, 0x5C, 0x60, 0x62, 0x5E];
+
     private void RecomputePartyStats(UnboundMon mon)
     {
         var stats = UnboundData.ComputeStats(mon);
         for (var i = 0; i < 6; i++)
-            BinaryPrimitives.WriteUInt16LittleEndian(mon.Buffer.AsSpan(mon.Offset + 0x58 + i * 2), (ushort)stats[i]);
+            BinaryPrimitives.WriteUInt16LittleEndian(mon.Buffer.AsSpan(mon.Offset + PartyStatOffsets[i]), (ushort)stats[i]);
         var current = Math.Min(mon.CurrentHp, stats[0]);
         BinaryPrimitives.WriteUInt16LittleEndian(mon.Buffer.AsSpan(mon.Offset + 0x56), (ushort)current);
     }
@@ -363,6 +368,9 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
         mon.Pid = (uint)(species * 2654435761) & 0xFFFF_FFFF; // PUSE's deterministic starter personality
         mon.Otid = (uint)((trainer.SID << 16) | (trainer.TID & 0xFFFF));
         mon.Nickname = UnboundData.SpeciesName(species);
+        scratch[0x12] = 2; // English
+        scratch[0x13] = 2; // hasSpecies
+        scratch[0x25] = 70; // base friendship: the compact record carries it into the party
         mon.Moves = [.. nationalMoves.Where(move => move > 0).Select(UnboundData.MoveFromNational).Where(move => move > 0).Take(4)];
         mon.IVs = [31, 31, 31, 31, 31, 31];
         mon.Ball = ball is { } wanted && UnboundMon.TryStoreBall(wanted, out var cfru) ? cfru : 3;
@@ -438,6 +446,18 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
         var sourceBytes = new byte[source.Size];
         source.Buffer.AsSpan(source.Offset, source.Size).CopyTo(sourceBytes);
         var sourceView = new UnboundMon(sourceBytes, 0, source.Party);
+
+        if (fromBox == -1 && toBox == -1 && (uint)toSlot < (uint)PartyCount)
+        {
+            // Inside the party, onto another Pokémon: the two swap places, as in the games.
+            var from = _data.AsSpan(PartyBase + PartyOffset + fromSlot * PartyMonSize, PartyMonSize);
+            var to = _data.AsSpan(PartyBase + PartyOffset + toSlot * PartyMonSize, PartyMonSize);
+            var held = from.ToArray();
+            to.CopyTo(from);
+            held.CopyTo(to);
+            CommitParty();
+            return;
+        }
 
         if (toBox == -1)
         {
@@ -524,7 +544,9 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
 
     public bool ImportSlot(int box, int slot, byte[] fileBytes, string? format = null)
     {
-        var entity = EntityFormat.GetFromBytes(fileBytes);
+        if (EntityBytes.Normalize(format) == CfruEntity.Unbound)
+            return ImportOwn(box, slot, fileBytes);
+        var entity = EntityBytes.Parse(fileBytes, format);
         if (entity is null || entity.Species == 0) return false;
         if (entity is not PK3)
         {
@@ -533,13 +555,14 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
             entity = converted;
         }
         var pk3 = (PK3)entity;
+        if (Landing(pk3, out _) is not { } ids) return false;
 
         if (box == -1)
         {
             if (PartyCount >= 6) return false;
             var party = new UnboundMon(_data, PartyBase + PartyOffset + PartyCount * PartyMonSize, party: true);
             _data.AsSpan(party.Offset, PartyMonSize).Clear();
-            FromPk3(pk3, party);
+            FromPk3(pk3, ids, party);
             BinaryPrimitives.WriteUInt32LittleEndian(_data.AsSpan(PartyBase + PartyCountOffset), (uint)(PartyCount + 1));
             CommitParty();
             return true;
@@ -551,52 +574,61 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
             ? new UnboundMon(_stream, location.Value.Offset, party: false)
             : new UnboundMon(_data, location.Value.Offset, party: false);
         target.Buffer.AsSpan(target.Offset, PcMonSize).Clear();
-        FromPk3(pk3, target);
+        FromPk3(pk3, ids, target);
         CommitPc(location);
         return true;
     }
 
-    /// <summary>Copies a mon between slots of either format; crossing into the party
-    /// rebuilds the computed tail (level, stats, HP), the compact form drops nothing.</summary>
+    /// <summary>Copies a mon between slots exactly as the game moves it: the same form
+    /// takes every byte, a box takes the compact record (<see cref="CfruEntity.Compact"/>),
+    /// and the party rebuilds the computed tail like a withdrawal.</summary>
     private void CopyBetween(UnboundMon source, UnboundMon target)
     {
-        target.Buffer.AsSpan(target.Offset, target.Size).Clear();
-        target.Species = source.Species;
-        target.HeldItem = source.HeldItem;
-        target.Experience = source.Experience;
-        target.Pid = source.Pid;
-        target.Otid = source.Otid;
-        target.Nickname = source.Nickname;
-        target.Moves = source.Moves;
-        target.IVs = source.IVs;
-        target.EVs = source.EVs;
-        target.Ball = source.Ball;
-        target.HiddenAbility = source.HiddenAbility;
-        WriteOtName(target, source.OriginalTrainerName);
-        if (target.Party)
-        {
-            target.Buffer[target.Offset + 0x29] = (byte)Math.Max(source.Friendship, 70);
-            target.Buffer[target.Offset + 0x54] = (byte)source.Level;
-            RecomputePartyStats(target);
-        }
+        var from = source.Buffer.AsSpan(source.Offset, source.Size);
+        if (source.Party == target.Party)
+            from.CopyTo(target.Buffer.AsSpan(target.Offset, target.Size));
+        else if (!target.Party)
+            CfruEntity.Compact(from).CopyTo(target.Buffer.AsSpan(target.Offset, PcMonSize));
+        else
+            Withdraw(from, target);
     }
 
-    private static void FromPk3(PK3 pk3, UnboundMon target)
+    /// <summary>A compact record into a party slot: every stored field, full PP
+    /// (<see cref="CfruEntity.Expand"/>), level from EXP, stats and full HP.</summary>
+    private void Withdraw(ReadOnlySpan<byte> compact, UnboundMon party)
     {
-        target.Species = UnboundData.SpeciesFromNational(pk3.Species);
-        target.HeldItem = UnboundData.ItemFromNational(ItemConverter.GetItemFuture3((ushort)pk3.HeldItem));
+        CfruEntity.Expand(compact, party.Buffer.AsSpan(party.Offset, PartyMonSize), UnboundData.MoveBasePp);
+        party.Buffer[party.Offset + 0x54] = (byte)UnboundData.LevelForExperience(party.Species, party.Experience);
+        RecomputePartyStats(party);
+        BinaryPrimitives.WriteUInt16LittleEndian(party.Buffer.AsSpan(party.Offset + 0x56), (ushort)party.PartyStats![0]);
+    }
+
+    /// <summary>The Unbound ids <paramref name="pk3"/> lands with, or null with the reason one
+    /// of its national ids has no counterpart in Unbound's tables.</summary>
+    internal static CfruPk3.Inbound? Landing(PK3 pk3, out string? refusal) =>
+        CfruPk3.FromPk3(pk3, "Unbound", UnboundData.SpeciesFromNational, UnboundData.MoveFromNational, UnboundData.ItemFromNational,
+            species => UnboundData.AbilityIds(species) is var (a1, a2, hidden)
+                ? (UnboundData.AbilityToNational(a1), UnboundData.AbilityToNational(a2), UnboundData.AbilityToNational(hidden))
+                : default,
+            ball => UnboundMon.TryStoreBall(ball, out var stored) ? stored : -1, out refusal);
+
+    private static void FromPk3(PK3 pk3, CfruPk3.Inbound ids, UnboundMon target)
+    {
+        target.Species = ids.Species;
+        target.HeldItem = ids.HeldItem;
         target.Experience = Math.Max(pk3.EXP, 1u);
         target.Pid = pk3.PID;
         target.Otid = pk3.ID32;
         target.Nickname = pk3.Nickname.Length > 0 ? pk3.Nickname : UnboundData.SpeciesName(target.Species);
-        target.Moves = [UnboundData.MoveFromNational(pk3.Move1), UnboundData.MoveFromNational(pk3.Move2),
-            UnboundData.MoveFromNational(pk3.Move3), UnboundData.MoveFromNational(pk3.Move4)];
+        target.Moves = ids.Moves;
         Span<int> ivs = stackalloc int[6]; // PKHeX order: HP, Atk, Def, Spe, SpA, SpD
         pk3.GetIVs(ivs);
         target.IVs = [ivs[0], ivs[1], ivs[2], ivs[4], ivs[5], ivs[3]]; // -> app order HP, Atk, Def, SpA, SpD, Spe
         target.EVs = [pk3.EV_HP, pk3.EV_ATK, pk3.EV_DEF, pk3.EV_SPA, pk3.EV_SPD, pk3.EV_SPE];
-        target.Ball = 3;
-        target.HiddenAbility = false;
+        target.Ball = ids.Ball;
+        target.HiddenAbility = ids.HiddenAbility;
+        target.Buffer[target.Offset + 0x12] = (byte)Math.Clamp(pk3.Language, 1, 5);
+        target.Buffer[target.Offset + 0x13] = 2; // hasSpecies, as the game sets it
         WriteOtName(target, pk3.OriginalTrainerName);
         if (target.Party)
         {
@@ -605,36 +637,71 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
         }
     }
 
+    /// <summary>Lands this game's own export (<see cref="CfruEntity"/>) as it is: a box
+    /// takes the compact record verbatim, the party rebuilds its tail like a withdrawal.</summary>
+    private bool ImportOwn(int box, int slot, byte[] compact)
+    {
+        if (compact.Length != PcMonSize) return false;
+        if (!new UnboundMon(compact.ToArray(), 0, party: false).LooksValid) return false;
+
+        if (box == -1)
+        {
+            if (PartyCount >= 6) return false;
+            Withdraw(compact, new UnboundMon(_data, PartyBase + PartyOffset + PartyCount * PartyMonSize, party: true));
+            BinaryPrimitives.WriteUInt32LittleEndian(_data.AsSpan(PartyBase + PartyCountOffset), (uint)(PartyCount + 1));
+            CommitParty();
+            return true;
+        }
+
+        var location = ResolveSlot(box, slot);
+        if (location is null) return false;
+        compact.CopyTo((location.Value.Stream ? _stream : _data).AsSpan(location.Value.Offset, PcMonSize));
+        CommitPc(location);
+        return true;
+    }
+
     public SlotExport ExportSlot(int box, int slot)
     {
         var mon = TryMon(box, slot);
         if (mon is null || !mon.LooksValid)
             throw new InvalidOperationException("That slot is empty.");
 
-        var pk3 = new PK3
-        {
-            Species = (ushort)UnboundData.NationalIdOf(mon.Species),
-            PID = mon.Pid,
-            ID32 = mon.Otid,
-            Nickname = mon.Nickname,
-            IsNicknamed = true,
-            HeldItem = ItemConverter.GetItemOld3((ushort)UnboundData.ItemToNational(mon.HeldItem)),
-            EXP = mon.Experience,
-            Move1 = (ushort)UnboundData.MoveToNational(mon.Moves[0]),
-            Move2 = (ushort)UnboundData.MoveToNational(mon.Moves[1]),
-            Move3 = (ushort)UnboundData.MoveToNational(mon.Moves[2]),
-            Move4 = (ushort)UnboundData.MoveToNational(mon.Moves[3]),
-            OriginalTrainerName = mon.OriginalTrainerName,
-            Language = (int)LanguageID.English,
-            Version = GameVersion.FR,
-        };
+        // The compact record the game boxes, so the Bank holds every byte the game does.
+        var bytes = mon.Party
+            ? CfruEntity.Compact(mon.Buffer.AsSpan(mon.Offset, PartyMonSize))
+            : mon.Buffer.AsSpan(mon.Offset, PcMonSize).ToArray();
+        return new SlotExport(bytes, $"{UnboundData.SpeciesName(mon.Species)}.pk3ub", CfruEntity.Unbound);
+    }
+
+    /// <summary>The Bank's facts for an exported mon, read through Unbound's tables.</summary>
+    internal static BankEntryInfo Describe(UnboundMon mon, string sourceName) =>
+        new(UnboundData.NationalIdOf(mon.Species), 0, mon.IsShiny, mon.Nickname, mon.Level, 3, sourceName,
+            CfruEntity.Unbound, HeldItemId(mon), default(SpriteTraits));
+
+    /// <summary>The PK3 another game imports: every id bridged to its national twin through
+    /// Unbound's tables, none of the CFRU-only fields (only Unbound itself reads the exact
+    /// record). Null with the reason when an id has no Generation 3 counterpart.</summary>
+    internal static PK3? ToPk3(UnboundMon mon, out string? refusal, List<string>? adjustments = null)
+    {
+        var national = UnboundData.NationalIdOf(mon.Species);
+        var pk3 = CfruPk3.ToPk3(new CfruPk3.Outbound(
+            UnboundData.SpeciesName(mon.Species), national, UnboundData.SpeciesFromNational(national) == mon.Species, mon.Pid,
+            [.. mon.Moves.Select(move => (move, UnboundData.MoveToNational(move), UnboundData.MoveName(move)))],
+            mon.HeldItem, UnboundData.ItemToNational(mon.HeldItem), UnboundData.ItemName(mon.HeldItem),
+            mon.HiddenAbility, UnboundData.AbilityToNational(UnboundData.ActiveAbility(mon)), mon.DisplayBall), out refusal, adjustments);
+        if (pk3 is null) return null;
+        pk3.ID32 = mon.Otid;
+        pk3.Nickname = mon.Nickname;
+        pk3.IsNicknamed = true;
+        pk3.EXP = mon.Experience;
+        pk3.OriginalTrainerName = mon.OriginalTrainerName;
+        pk3.Language = (int)LanguageID.English;
+        pk3.Version = GameVersion.FR;
         var ivs = mon.IVs;
         pk3.SetIVs([ivs[0], ivs[1], ivs[2], ivs[5], ivs[3], ivs[4]]); // storage -> PKHeX order
         pk3.SetEVs([mon.EVs[0], mon.EVs[1], mon.EVs[2], mon.EVs[5], mon.EVs[4], mon.EVs[3]]);
         pk3.RefreshChecksum();
-        var bytes = new byte[pk3.SIZE_PARTY];
-        pk3.WriteDecryptedDataParty(bytes);
-        return new SlotExport(bytes, $"{UnboundData.SpeciesName(mon.Species)}.pk3");
+        return pk3;
     }
 
     /// <summary>The grid's held-item flag: the bridged national id, or -1 when the ROM item has
@@ -660,7 +727,7 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
                 ? new SlotSummary(-1, slot, UnboundData.NationalIdOf(valid.Species), valid.Nickname, valid.IsShiny, true, HeldItem: HeldItemId(valid))
                 : new SlotSummary(-1, slot, null, null, false, true));
         }
-        return new SaveSnapshot("UNBOUND", 3, _originalBytes.ToArray(), slots, displayName);
+        return new SaveSnapshot(SnapshotTag, 3, _originalBytes.ToArray(), slots, displayName);
     }
 
     public ReadOnlyMemory<byte> Serialize()
@@ -758,6 +825,7 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
     public IReadOnlyList<int> GetMissingSpecies() => [];
     public DexEntryState GetDexEntry(int species) => new(false, false);
     public void SetDexEntry(int species, bool seen, bool caught) { }
+    public bool IsDexSpecies(int species) => species >= 1;
     public DexProgress GetDexProgress() => new(0, 0, 1);
     public void CompleteDex() => throw NotYet("The Unbound Pokédex editor");
     public IReadOnlyList<NuzlockeCatch> GetNuzlockeReport() => [];
@@ -959,6 +1027,9 @@ internal sealed class UnboundEngineSession : ISaveEngineSession
     public DaycareWithdrawal WithdrawDaycareToFirstEmptyBox(int facility, int slot) => throw NotYet("The Unbound Day Care");
     public bool SupportsLegalFashionUnlock => false;
     public void UnlockAllLegalFashion() { }
+    public bool SupportsStylePoints => false;
+    public int GetStylePoints() => 0;
+    public void SetStylePoints(int value) { }
     public MysteryGiftInbox GetMysteryGiftInbox() => new(false, []);
     public TrainerRecordsInfo GetTrainerRecords() => new(false, []);
     public TrainerStats GetTrainerStats() => new(false, 0, 0, 0, false, 0, 0, false, 0, 0);

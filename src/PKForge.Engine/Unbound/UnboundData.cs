@@ -11,6 +11,8 @@ namespace PKForge.Engine.Unbound;
 /// </summary>
 internal static class UnboundData
 {
+    // Loaded on first use, from any thread: each loader builds its table locally and assigns
+    // the field only once it is complete, so a reader never sees a half-filled table.
     private static Dictionary<int, string>? _species;
     private static Dictionary<int, string>? _moves;
     private static Dictionary<int, string>? _items;
@@ -133,7 +135,8 @@ internal static class UnboundData
         return builder.ToString();
     }
 
-    public static string ItemName(int item) => Name(ref _items, "unbound.items.txt", item);
+    /// <summary>The item's name; item 0 is "None", as in PKHeX's lists (the ROM's table has no entry for it).</summary>
+    public static string ItemName(int item) => item == 0 ? "None" : Name(ref _items, "unbound.items.txt", item);
     public static string AbilityName(int ability) => Name(ref _abilities, "unbound.abilities.txt", ability);
 
     public static int MoveBasePp(int move)
@@ -164,30 +167,28 @@ internal static class UnboundData
         if (_ballItems is not null)
             return (_ballItems, _berryItems!, _tmItems!, _keyItems!);
 
-        _ballItems = [];
-        _berryItems = [];
-        _tmItems = [];
-        _keyItems = [];
+        HashSet<int> ball = [], berry = [], tm = [], key = [];
         try
         {
             var root = JsonDocument.Parse(ReadAll("unbound.item_pocket_map.json")).RootElement.GetProperty("pockets");
-            Fill(_ballItems, root, "ball");
-            Fill(_berryItems, root, "berry");
-            var tm = new HashSet<int>();
+            Fill(ball, root, "ball");
+            Fill(berry, root, "berry");
             Fill(tm, root, "tm");
             Fill(tm, root, "hm");
-            _tmItems = tm;
-            Fill(_keyItems, root, "key");
+            Fill(key, root, "key");
         }
         catch
         {
             // PUSE's conservative fallback sets, from the same project.
-            _ballItems = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 52, 53, 54, 59, 60, 622, 623, 624, 625, 626, 627, 628, 629, 630, 631];
-            _berryItems = [.. Enumerable.Range(133, 43).Concat(Enumerable.Range(539, 24))];
-            _tmItems = [.. Enumerable.Range(289, 58).Concat(Enumerable.Range(375, 62)).Concat(Enumerable.Range(437, 8))];
-            _keyItems = [.. Enumerable.Range(259, 30).Concat(Enumerable.Range(348, 27))];
+            ball = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 52, 53, 54, 59, 60, 622, 623, 624, 625, 626, 627, 628, 629, 630, 631];
+            berry = [.. Enumerable.Range(133, 43).Concat(Enumerable.Range(539, 24))];
+            tm = [.. Enumerable.Range(289, 58).Concat(Enumerable.Range(375, 62)).Concat(Enumerable.Range(437, 8))];
+            key = [.. Enumerable.Range(259, 30).Concat(Enumerable.Range(348, 27))];
         }
-        return (_ballItems, _berryItems, _tmItems, _keyItems);
+        // The ball set is what the check above reads, so it is published last.
+        (_berryItems, _tmItems, _keyItems) = (berry, tm, key);
+        _ballItems = ball;
+        return (ball, berry, tm, key);
 
         static void Fill(HashSet<int> into, JsonElement root, string family)
         {
@@ -198,7 +199,13 @@ internal static class UnboundData
         }
     }
 
-    /// <summary>Primary + secondary type ids (the CFRU engine's own type order).</summary>
+    private static readonly string[] ModernTypeNames =
+    [
+        "Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel",
+        "Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark", "Fairy",
+    ];
+
+    /// <summary>Primary + secondary type ids in the modern order; one id for a single type.</summary>
     public static int[] TypesOf(int species)
     {
         if (_types is null) LoadTypes();
@@ -322,32 +329,33 @@ internal static class UnboundData
 
     private static void LoadPp()
     {
-        _movePp = [];
+        var built = new Dictionary<int, int>();
         foreach (var (id, text) in LoadNameMap("unbound.movepp.txt"))
-            _movePp[id] = int.TryParse(text, out var pp) ? pp : 0;
+            built[id] = int.TryParse(text, out var pp) ? pp : 0;
+        _movePp = built;
     }
 
     private static void LoadTypes()
     {
-        _types = [];
+        var built = new Dictionary<int, int[]>();
         foreach (var property in JsonDocument.Parse(ReadAll("unbound.species_types.json")).RootElement.EnumerateObject())
         {
-            var entry = property.Value;
-            _types[int.Parse(property.Name)] =
-            [
-                entry.GetProperty("type1_id").GetInt32(),
-                entry.GetProperty("type2_id").GetInt32(),
-            ];
+            // The file's ids follow the CFRU engine's order (Fire 10, Fairy 23); the app uses the
+            // modern order, so the names are mapped instead.
+            int[] types = [.. property.Value.GetProperty("types").EnumerateArray()
+                .Select(type => Math.Max(0, Array.IndexOf(ModernTypeNames, type.GetString())))];
+            built[int.Parse(property.Name)] = types.Length == 0 ? [0] : types;
         }
+        _types = built;
     }
 
     private static void LoadBaseStats()
     {
-        _baseStats = [];
+        var built = new Dictionary<int, int[]>();
         foreach (var property in JsonDocument.Parse(ReadAll("unbound.species_base_stats.json")).RootElement.EnumerateObject())
         {
             var entry = property.Value;
-            _baseStats[int.Parse(property.Name)] =
+            built[int.Parse(property.Name)] =
             [
                 entry.GetProperty("hp").GetInt32(),
                 entry.GetProperty("atk").GetInt32(),
@@ -357,33 +365,37 @@ internal static class UnboundData
                 entry.GetProperty("spe").GetInt32(),
             ];
         }
+        _baseStats = built;
     }
 
     private static void LoadIdentity()
     {
-        _genderThresholds = [];
+        var built = new Dictionary<int, int>();
         foreach (var property in JsonDocument.Parse(ReadAll("unbound.species_identity_meta.json")).RootElement.EnumerateObject())
-            _genderThresholds[int.Parse(property.Name)] = property.Value.GetProperty("gender_threshold").GetInt32();
+            built[int.Parse(property.Name)] = property.Value.GetProperty("gender_threshold").GetInt32();
+        _genderThresholds = built;
     }
 
     private static void LoadGrowth()
     {
-        _growthRates = [];
+        var built = new Dictionary<int, int>();
         foreach (var property in JsonDocument.Parse(ReadAll("unbound.species_growth_rates.json")).RootElement.EnumerateObject())
-            _growthRates[int.Parse(property.Name)] = property.Value.GetProperty("growth_rate").GetInt32();
+            built[int.Parse(property.Name)] = property.Value.GetProperty("growth_rate").GetInt32();
+        _growthRates = built;
     }
 
     private static void LoadAbilitiesMeta()
     {
-        _abilitiesMeta = [];
+        var built = new Dictionary<int, (int A1, int A2, int Hidden)>();
         foreach (var property in JsonDocument.Parse(ReadAll("unbound.species_abilities_meta.json")).RootElement.EnumerateObject())
         {
             var entry = property.Value;
-            _abilitiesMeta[int.Parse(property.Name)] = (
+            built[int.Parse(property.Name)] = (
                 entry.GetProperty("ability_1_id").GetInt32(),
                 entry.GetProperty("ability_2_id").GetInt32(),
                 entry.GetProperty("hidden_ability_id").GetInt32());
         }
+        _abilitiesMeta = built;
     }
 
     private static string ReadAll(string resource)

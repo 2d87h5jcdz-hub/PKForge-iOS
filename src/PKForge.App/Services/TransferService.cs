@@ -71,11 +71,7 @@ public sealed class TransferService(
                 ? Refusal(entityBytes, nickname, snapshot, target.GameLabel, format)
                 : $"{nickname} cannot go to {target.GameLabel}. {refusal}");
 
-        var candidate = session.Serialize();
-        var receipt = await writer.WriteAsync(target.DocumentId, snapshot, candidate,
-            $"{nickname} arrived from a transfer", cancellationToken).ConfigureAwait(false);
-        if (receipt.Changed)
-            sessions.MarkWritten(target.DocumentId, candidate);
+        var receipt = await WriteTargetAsync(target, snapshot, session, $"{nickname} arrived from a transfer", cancellationToken).ConfigureAwait(false);
         return new TransferOutcome(true, $"{nickname} joined {target.GameLabel} (box {landing.Box + 1}).", landing.Box, landing.Slot, receipt.BackupId);
     }
 
@@ -101,12 +97,57 @@ public sealed class TransferService(
     /// Imports through the engine's reporting path when available, so a refusal says why.
     /// Downgrades are allowed: only call this after the user confirmed the transfer preview.
     /// </summary>
-    public static bool TryImport(ISaveEngineSession session, int box, int slot, byte[] bytes, out string? refusal, string? format = null)
+    public static bool TryImport(ISaveEngineSession session, int box, int slot, byte[] bytes, out string? refusal, string? format = null) =>
+        BankTransfers.TryImport(session, box, slot, bytes, out refusal, format);
+
+    /// <summary>
+    /// Places a whole batch in the target save's free slots (from <paramref name="startAt"/>) in
+    /// one write, or writes nothing and says which Pokémon could not enter and why. Returns the
+    /// slots the batch took, for <see cref="ReleaseFromGameAsync"/> to undo it.
+    /// </summary>
+    public async Task<(string? Refusal, IReadOnlyList<SlotRef> Landed)> SendManyToGameAsync(
+        IReadOnlyList<TransferItem> items, DetectedSave target, string changeDescription,
+        CancellationToken cancellationToken = default, SlotRef? startAt = null)
     {
-        refusal = null;
-        if (session is SaveEngineSession engineSession)
-            return engineSession.ImportSlotWithReport(box, slot, bytes, out refusal, format) is not null;
-        return session.ImportSlot(box, slot, bytes, format);
+        ArgumentNullException.ThrowIfNull(target);
+        using var session = await OpenTargetAsync(target, cancellationToken).ConfigureAwait(false);
+        var snapshot = session.Snapshot;
+        var rooms = SlotPlanning.FreeSlotsFrom(snapshot.Slots, startAt).Take(items.Count).ToList();
+        var failed = BankTransfers.ImportAll(session, items, rooms, out var refusal);
+        if (failed >= 0)
+        {
+            if (failed >= items.Count) return ($"{target.GameLabel} has room for {rooms.Count} of {items.Count} Pokémon.", []);
+            var item = items[failed];
+            return (refusal is null
+                ? Refusal(item.Data, item.Nickname, snapshot, target.GameLabel, item.Format)
+                : $"{item.Nickname} cannot go to {target.GameLabel}. {refusal}", []);
+        }
+        await WriteTargetAsync(target, snapshot, session, changeDescription, cancellationToken).ConfigureAwait(false);
+        return (null, rooms);
+    }
+
+    /// <summary>Empties <paramref name="slots"/> of the target save in one write: the undo of
+    /// a batch that reached it but could not leave its source.</summary>
+    public async Task ReleaseFromGameAsync(DetectedSave target, IReadOnlyList<SlotRef> slots, string changeDescription,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        using var session = await OpenTargetAsync(target, cancellationToken).ConfigureAwait(false);
+        var snapshot = session.Snapshot;
+        foreach (var slot in slots)
+            session.ReleaseSlot(slot.Box, slot.Slot);
+        await WriteTargetAsync(target, snapshot, session, changeDescription, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Writes a throwaway target session back through the safe path (validate, backup, atomic write).</summary>
+    private async Task<SaveWriteReceipt> WriteTargetAsync(DetectedSave target, SaveSnapshot snapshot, ISaveEngineSession session,
+        string changeDescription, CancellationToken cancellationToken)
+    {
+        var candidate = session.Serialize();
+        var receipt = await writer.WriteAsync(target.DocumentId, snapshot, candidate, changeDescription, cancellationToken).ConfigureAwait(false);
+        if (receipt.Changed)
+            sessions.MarkWritten(target.DocumentId, candidate);
+        return receipt;
     }
 
     /// <summary>Why the entity cannot enter the target (the species or file names itself), else the generic refusal.</summary>

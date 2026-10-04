@@ -465,7 +465,8 @@ public sealed class SaveWriteSafetyTests
 
     private sealed class NullBackups : IBackupService
     {
-        public ValueTask<BackupReceipt> CreateAsync(SaveSnapshot source, string? changeDescription = null, CancellationToken cancellationToken = default)
+        public ValueTask<BackupReceipt> CreateAsync(SaveSnapshot source, string? changeDescription = null, string? documentId = null,
+            CancellationToken cancellationToken = default)
             => ValueTask.FromResult(new BackupReceipt("backup-0000000000", DateTimeOffset.UtcNow, "sha"));
         public ValueTask<IReadOnlyList<BackupInfo>> ListAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask<ReadOnlyMemory<byte>> ReadAsync(string backupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();

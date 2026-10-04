@@ -7,6 +7,8 @@ namespace PKForge.App.Theme;
 /// <summary>
 /// MAUI-facing design tokens. The single source of truth for colors is <see cref="Pksm"/>
 /// (PKForge.Chrome); this maps those SKColors to MAUI Colors so views never hardcode values.
+/// Chrome tokens follow the current <see cref="ColorTheme"/>; signals (legality, shiny, the
+/// summary page accents, the gift world) keep their values in every theme.
 /// Design language: the PKSM/DS-era storage world rebuilt in the logo's dark pixel grid,
 /// with layered navy panels, cobalt structure, cyan focus light, and adaptive pale ink.
 /// </summary>
@@ -14,57 +16,77 @@ public static class UiTokens
 {
     private static Color As(SKColor c) => Color.FromRgb(c.Red, c.Green, c.Blue);
 
+    // One Color instance per token and theme: views compare a control's color against a token
+    // to read its state, which only holds while the token keeps returning the same instance.
+    private static readonly Dictionary<string, Color> Cache = [];
+    private static int _cacheVersion = -1;
+
+    private static Color Themed(Color value, [System.Runtime.CompilerServices.CallerMemberName] string token = "")
+    {
+        lock (Cache)
+        {
+            if (_cacheVersion != ColorTheme.Version)
+            {
+                Cache.Clear();
+                _cacheVersion = ColorTheme.Version;
+            }
+            if (Cache.TryGetValue(token, out var cached)) return cached;
+            Cache[token] = value;
+            return value;
+        }
+    }
+
     // ---- Surfaces ----
-    public static readonly Color Paper = As(Pksm.Paper);              // white content cards on worlds
-    public static readonly Color PaperShade = As(Pksm.PaperShade);
-    public static readonly Color Shell = As(Pksm.Paper);               // white chrome windows
-    public static readonly Color ShellEdge = As(Pksm.PaperEdge);        // soft grey border
-    public static readonly Color ShellPress = As(Pksm.PaperShade);
-    public static readonly Color Housing = As(Pksm.Housing);           // the grey grid page backdrop
+    public static Color Paper => Themed(As(Pksm.Paper));              // white content cards on worlds
+    public static Color PaperShade => Themed(As(Pksm.PaperShade));
+    public static Color Shell => Themed(As(Pksm.Paper));               // white chrome windows
+    public static Color ShellEdge => Themed(As(Pksm.PaperEdge));        // soft grey border
+    public static Color ShellPress => Themed(As(Pksm.PaperShade));
+    public static Color Housing => Themed(As(Pksm.Housing));           // the grey grid page backdrop
 
     // Legacy names still referenced by views; do not add uses.
-    public static readonly Color LcdBg = As(Pksm.PaperShade);
-    public static readonly Color LcdText = As(Pksm.Ink);
-    public static readonly Color LcdFrame = As(Pksm.PaperEdge);
-    public static readonly Color Navy0 = As(Pksm.Paper);
-    public static readonly Color Navy1 = As(Pksm.Ink);
-    public static readonly Color Blueprint = As(Pksm.SelectBorder);
+    public static Color LcdBg => Themed(As(Pksm.PaperShade));
+    public static Color LcdText => Themed(As(Pksm.Ink));
+    public static Color LcdFrame => Themed(As(Pksm.PaperEdge));
+    public static Color Navy0 => Themed(As(Pksm.Paper));
+    public static Color Navy1 => Themed(As(Pksm.Ink));
+    public static Color Blueprint => Themed(As(Pksm.SelectBorder));
 
     // ---- Ink ----
-    public static readonly Color Ink0 = As(Pksm.Ink);
-    public static readonly Color Ink1 = As(Pksm.InkSoft);
-    public static readonly Color InkSoft = As(Pksm.InkSoft);
-    public static readonly Color SelectInk = As(Pksm.SelectInk);
-    public static readonly Color SelectBorder = As(Pksm.SelectBorder);
-    public static readonly Color SelectFill = As(Pksm.SelectFill);
+    public static Color Ink0 => Themed(As(Pksm.Ink));
+    public static Color Ink1 => Themed(As(Pksm.InkSoft));
+    public static Color InkSoft => Themed(As(Pksm.InkSoft));
+    public static Color SelectInk => Themed(As(Pksm.SelectInk));
+    public static Color SelectBorder => Themed(As(Pksm.SelectBorder));
+    public static Color SelectFill => Themed(As(Pksm.SelectFill));
 
     // ---- Chrome accents ----
-    public static readonly Color Maroon = As(Pksm.HeaderBlue);       // legacy name: logo-navy header strips
-    public static readonly Color MaroonDeep = As(Pksm.ButtonBlueDeep);
-    public static readonly Color Indigo = As(Pksm.Indigo);
-    public static readonly Color IndigoLight = As(Pksm.IndigoLight);
-    public static readonly Color IndigoInk = As(Pksm.IndigoInk);
-    public static readonly Color MenuBlue = As(Pksm.StorageMenuBlue);
-    public static readonly Color MenuBlueDeep = As(Pksm.StorageMenuBlueDeep);
+    public static Color Maroon => Themed(As(Pksm.HeaderBlue));       // legacy name: logo-navy header strips
+    public static Color MaroonDeep => Themed(As(Pksm.ButtonBlueDeep));
+    public static Color Indigo => Themed(As(Pksm.Indigo));
+    public static Color IndigoLight => Themed(As(Pksm.IndigoLight));
+    public static Color IndigoInk => Themed(As(Pksm.IndigoInk));
+    public static Color MenuBlue => Themed(As(Pksm.StorageMenuBlue));
+    public static Color MenuBlueDeep => Themed(As(Pksm.StorageMenuBlueDeep));
 
     // ---- Button language ----
-    public static readonly Color ChoiceFill = As(Pksm.Paper);
-    public static readonly Color ChoiceFillPress = As(Pksm.SelectFill);
-    public static readonly Color ChoiceRim = As(Pksm.ButtonBlue);
-    public static readonly Color ChoiceRimDeep = As(Pksm.ButtonBlueDeep);
-    public static readonly Color Cyan = As(Pksm.ButtonBlue);
-    public static readonly Color Blue = As(Pksm.StorageMenuBlue);
+    public static Color ChoiceFill => Themed(As(Pksm.Paper));
+    public static Color ChoiceFillPress => Themed(As(Pksm.SelectFill));
+    public static Color ChoiceRim => Themed(As(Pksm.ButtonBlue));
+    public static Color ChoiceRimDeep => Themed(As(Pksm.ButtonBlueDeep));
+    public static Color Cyan => Themed(As(Pksm.ButtonBlue));
+    public static Color Blue => Themed(As(Pksm.StorageMenuBlue));
 
     // ---- Worlds ----
-    public static readonly Color SummaryBg = As(Pksm.SummaryBg);
+    public static Color SummaryBg => Themed(As(Pksm.SummaryBg));
     public static readonly Color RibbonGold = As(Pksm.RibbonGold);
     public static readonly Color GiftPink = As(Pksm.GiftPink);
     public static readonly Color GiftPinkLight = As(Pksm.GiftPinkLight);
     public static readonly Color GiftRed = As(Pksm.GiftRed);
-    public static readonly Color BagNavy = As(Pksm.BagNavy);
-    public static readonly Color BagNavyDeep = As(Pksm.BagNavyDeep);
-    public static readonly Color BagCyan = As(Pksm.BagCyan);
-    public static readonly Color BagCyanEdge = As(Pksm.BagCyanEdge);
+    public static Color BagNavy => Themed(As(Pksm.BagNavy));
+    public static Color BagNavyDeep => Themed(As(Pksm.BagNavyDeep));
+    public static Color BagCyan => Themed(As(Pksm.BagCyan));
+    public static Color BagCyanEdge => Themed(As(Pksm.BagCyanEdge));
 
     // ---- Signal (functional, reserved) ----
     public static readonly Color Green = As(Pksm.Legal);
@@ -74,26 +96,34 @@ public static class UiTokens
     public static readonly Color Ok = Green;
     public static readonly Color Warn = As(Pksm.ShinyGold);
     public static readonly Color Bad = As(Pksm.Illegal);
-    public static readonly Color DefaultAccent = Cyan;
+    public static Color DefaultAccent => Themed(Cyan);
 
-    public static readonly Color WorldText = As(Pksm.Ink);
-    public static readonly Color WorldTextMuted = As(Pksm.InkSoft);
-    public static readonly Color OnAccent = As(Pksm.LogoVoid);
-    public static readonly Color Scrim = Color.FromArgb("#CC14121D");
+    public static Color Bright => Themed(As(ColorTheme.Current.Bright));   // pure white chrome: titles, highlights
+    public static Color WorldText => Themed(As(Pksm.Ink));
+    public static Color WorldTextMuted => Themed(As(Pksm.InkSoft));
+    public static Color OnAccent => Themed(As(Pksm.LogoVoid));
+    public static Color Scrim => Themed(As(Pksm.LogoVoid).WithAlpha(0xCC / 255f));
+
+    // ---- The designer's editor rows ----
+    public static Color EditorLabel => Themed(As(EditorPaint.Label));
+    public static Color EditorValue => Themed(As(EditorPaint.Value));
+    public static Color EditorChipInk => Themed(As(EditorPaint.ChipInk));
+    public static Color ToolFill => Themed(As(ColorTheme.Current.ToolFill));
+    public static Color ToolEdge => Themed(As(ColorTheme.Current.ToolEdge));
 
     // ---- Skia twins for the grid renderers ----
-    public static readonly SKColor SkPaper = Pksm.Paper;
-    public static readonly SKColor SkChrome = Pksm.PaperEdge;
-    public static readonly SKColor SkInk = Pksm.Ink;
-    public static readonly SKColor SkMenuBlue = Pksm.StorageMenuBlue;
-    public static readonly SKColor SkFocusGold = Pksm.FocusBlue;
+    public static SKColor SkPaper => Pksm.Paper;
+    public static SKColor SkChrome => Pksm.PaperEdge;
+    public static SKColor SkInk => Pksm.Ink;
+    public static SKColor SkMenuBlue => Pksm.StorageMenuBlue;
+    public static SKColor SkFocusGold => Pksm.FocusBlue;
     public static readonly SKColor SkShinyGold = Pksm.ShinyGold;
     public static readonly SKColor SkCursorRed = Pksm.CursorRed;
-    public static readonly SKColor SkDefaultAccent = Pksm.SelectBorder;
-    public static readonly SKColor SkLcdBg = Pksm.PaperShade;
-    public static readonly SKColor SkLcdText = Pksm.Ink;
-    public static readonly SKColor SkLcdTileEdge = Pksm.PaperEdge;
-    public static readonly SKColor SkEmptyMark = Pksm.PaperShade;
+    public static SKColor SkDefaultAccent => Pksm.SelectBorder;
+    public static SKColor SkLcdBg => Pksm.PaperShade;
+    public static SKColor SkLcdText => Pksm.Ink;
+    public static SKColor SkLcdTileEdge => Pksm.PaperEdge;
+    public static SKColor SkEmptyMark => Pksm.PaperShade;
 
     // ---- The approved summary language, as tokens (one source for every screen) ----
 
@@ -116,18 +146,18 @@ public static class UiTokens
     public const double PanelEdge = 2;      // the cobalt bezel
     public const double ControlEdge = 1.5;  // menu-button edge
 
-    public static readonly Color PanelTop = As(PksmPaint.Lighter(Pksm.Paper, 0.05f));       // faint top light
-    public static readonly Color PanelShadow = As(Pksm.LogoVoid);                            // hard pixel drop
-    public static readonly Color StripTop = As(PksmPaint.Lighter(Pksm.HeaderBlue, 0.16f));
-    public static readonly Color StripBottom = As(PksmPaint.Darker(Pksm.HeaderBlue, 0.1f));
-    public static readonly Color ButtonTop = As(PksmPaint.Lighter(Pksm.LogoDeck, 0.04f));
-    public static readonly Color ButtonBottom = As(PksmPaint.Darker(Pksm.LogoDeck, 0.05f));
-    public static readonly Color ButtonEdge = As(Pksm.LogoGrid);                             // cobalt
-    public static readonly Color Outline = As(Pksm.ButtonBlueDeep);                          // void outline
-    public static readonly Color Rim = Color.FromRgba(0xF4, 0xF8, 0xFF, 0x70);                // the pale focus rim
-    public static readonly Color RowStripe = Color.FromRgba(Pksm.PaperShade.Red, Pksm.PaperShade.Green, Pksm.PaperShade.Blue, (byte)0x90);
-    public static readonly Color Divider = Color.FromRgba(Pksm.PaperEdge.Red, Pksm.PaperEdge.Green, Pksm.PaperEdge.Blue, (byte)0x70);
-    public static readonly Color Well = As(Pksm.PaperShade);                                 // recessed field / inset
+    public static Color PanelTop => Themed(As(PksmPaint.Lighter(Pksm.Paper, 0.05f)));       // faint top light
+    public static Color PanelShadow => Themed(As(Pksm.LogoVoid));                            // hard pixel drop
+    public static Color StripTop => Themed(As(PksmPaint.Lighter(Pksm.HeaderBlue, 0.16f)));
+    public static Color StripBottom => Themed(As(PksmPaint.Darker(Pksm.HeaderBlue, 0.1f)));
+    public static Color ButtonTop => Themed(As(PksmPaint.Lighter(Pksm.LogoDeck, 0.04f)));
+    public static Color ButtonBottom => Themed(As(PksmPaint.Darker(Pksm.LogoDeck, 0.05f)));
+    public static Color ButtonEdge => Themed(As(Pksm.LogoGrid));                             // cobalt
+    public static Color Outline => Themed(As(Pksm.ButtonBlueDeep));                          // void outline
+    public static Color Rim => Themed(As(Pksm.Ink).WithAlpha(0x70 / 255f));                // the pale focus rim
+    public static Color RowStripe => Themed(As(Pksm.PaperShade).WithAlpha(0x90 / 255f));
+    public static Color Divider => Themed(As(Pksm.PaperEdge).WithAlpha(0x70 / 255f));
+    public static Color Well => Themed(As(Pksm.PaperShade));                                 // recessed field / inset
 
     // Toned per-context accents (the summary bands): quiet surfaces, never neon edges.
     public static readonly Color AccentInfo = As(Pksm.BandInfo);
@@ -135,9 +165,9 @@ public static class UiTokens
     public static readonly Color AccentMoves = As(Pksm.BandMoves);
     public static readonly Color AccentOrigin = As(Pksm.BandOrigin);
     public static readonly Color AccentLegal = As(Pksm.BandLegal);
-    public static readonly Color AccentDanger = As(PksmPaint.Tone(Pksm.Illegal));
-    public static readonly Color AccentGift = As(PksmPaint.Tone(Pksm.GiftRed));
-    public static readonly Color AccentNeutral = As(Pksm.HeaderBlue);
+    public static Color AccentDanger => Themed(As(PksmPaint.Tone(Pksm.Illegal)));
+    public static Color AccentGift => Themed(As(PksmPaint.Tone(Pksm.GiftRed)));
+    public static Color AccentNeutral => Themed(As(Pksm.HeaderBlue));
 
     /// <summary>A signal colour toned into the navy world (for filled accent surfaces).</summary>
     public static Color Tone(Color signal)
@@ -149,9 +179,6 @@ public static class UiTokens
     /// <summary>Readable text colour for a signal used AS text on navy (chips become plain coloured text).</summary>
     public static Color TextTone(Color signal) =>
         signal.GetLuminosity() < 0.62f ? signal.WithLuminosity(0.66f) : signal;
-
-    /// <summary>MAUI color for a box wallpaper index (cycled like the games' PC boxes).</summary>
-    public static Color Wallpaper(int boxIndex) => As(Pksm.BoxWallpapers[((boxIndex % Pksm.BoxWallpapers.Length) + Pksm.BoxWallpapers.Length) % Pksm.BoxWallpapers.Length]);
 }
 
 /// <summary>The 18 Pokémon type colors (PKHeX type IDs 0–17), adaptive-theme source.</summary>

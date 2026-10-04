@@ -61,6 +61,28 @@ public interface ISpriteService
     /// </summary>
     bool TryGetBdspIcon(SpriteLook look, Action onLoaded, out SKBitmap? icon);
 
+    /// <summary>
+    /// Showdown's static front sprite (bundled with the app), trimmed to its opaque pixels, with
+    /// the same three states as <see cref="TryGetBdspIcon"/>: false while it loads; true with the
+    /// sprite; true with null when Showdown has none for this look (draw PKHeX's art).
+    /// </summary>
+    bool TryGetShowdownFront(SpriteLook look, Action onLoaded, out SKBitmap? sprite);
+
+    /// <summary>
+    /// The PKHeX shiny sprite for a shiny look, trimmed to its visible pixels, only when real
+    /// shiny art exists (never the normal sprite in its place). Three states as
+    /// <see cref="TryGetBdspIcon"/>: false while it loads; true with the sprite; true with null
+    /// when there is no shiny art (draw the normal icon with the shiny star).
+    /// </summary>
+    bool TryGetShinySprite(SpriteLook look, Action onLoaded, out SKBitmap? sprite);
+
+    /// <summary>
+    /// Showdown's box icon for a look, as the bundled icon sheet plus the icon's cell on it,
+    /// with the same three states: false while the sheet loads; true with the sheet and cell;
+    /// true with a null sheet when Showdown has no icon for this look.
+    /// </summary>
+    bool TryGetShowdownIcon(SpriteLook look, Action onLoaded, out SKBitmap? sheet, out SKRectI cell);
+
     /// <summary>Forgets which looks had no add-on icon, after an add-on was downloaded.</summary>
     void ForgetAddOnLookups();
 
@@ -373,6 +395,142 @@ public sealed class SpriteService : ISpriteService
             _awaitingAddOn.Clear();
         }
         foreach (var invalidate in repaint) MainThread.BeginInvokeOnMainThread(invalidate);
+    }
+
+    public bool TryGetShowdownFront(SpriteLook look, Action onLoaded, out SKBitmap? sprite)
+    {
+        sprite = null;
+        if (ShowdownCatalog.FrontPath(look) is not { } path) return true;
+        var key = "sdfront-" + path;
+        lock (_gate)
+        {
+            if (_cache.TryGetValue(key, out sprite)) return true;
+            if (!_loading.Add(key)) return false;
+        }
+
+        Task.Run(async () =>
+        {
+            SKBitmap? bitmap = null;
+            await DecodeGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await using var stream = await FileSystem.OpenAppPackageFileAsync(path).ConfigureAwait(false);
+                using var decoded = SKBitmap.Decode(stream);
+                bitmap = decoded is null ? null : TrimToOpaque(decoded);
+            }
+            catch (Exception error) when (error is IOException or FileNotFoundException) { }
+            finally { DecodeGate.Release(); }
+            lock (_gate)
+            {
+                _loading.Remove(key);
+                _cache[key] = bitmap; // a missing file caches null: PKHeX's art from then on
+                _eviction.Enqueue(key);
+                TrimCache();
+            }
+            onLoaded();
+        });
+        return false;
+    }
+
+    /// <summary>
+    /// A copy cropped to the opaque pixels. Showdown's fronts sit in 96×96 frames with uneven
+    /// padding; trimmed, every sprite can stand on the same ground line.
+    /// </summary>
+    private static SKBitmap TrimToOpaque(SKBitmap source, byte threshold = 0)
+    {
+        var bounds = PKForge.Chrome.StoragePaint.OpaqueBounds(source, new SKRectI(0, 0, source.Width, source.Height), threshold);
+        if (bounds.IsEmpty) return source.Copy();
+        using var trimmed = new SKBitmap();
+        source.ExtractSubset(trimmed, bounds);
+        return trimmed.Copy();
+    }
+
+    public bool TryGetShinySprite(SpriteLook look, Action onLoaded, out SKBitmap? sprite)
+    {
+        sprite = null;
+        if (!look.Shiny) return true;
+        var key = "shiny-" + look.CacheKey;
+        lock (_gate)
+        {
+            if (_cache.TryGetValue(key, out sprite)) return true;
+            if (!_loading.Add(key)) return false;
+        }
+
+        Task.Run(async () =>
+        {
+            SKBitmap? bitmap = null;
+            await DecodeGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                // Only candidates that keep the shiny colours; the first bundled one wins.
+                foreach (var candidate in SpriteCatalog.BundledCandidates(look)
+                    .Where(c => c.Fidelity is SpriteFidelity.Exact or SpriteFidelity.GenderMissing))
+                {
+                    try
+                    {
+                        await using var stream = await FileSystem.OpenAppPackageFileAsync(candidate.Path).ConfigureAwait(false);
+                        using var decoded = SKBitmap.Decode(stream);
+                        // Faint edge pixels (alpha 16 and under) would skew the fit to the icon.
+                        if (decoded is not null) bitmap = TrimToOpaque(decoded, 16);
+                        break;
+                    }
+                    catch (FileNotFoundException) { }
+                }
+            }
+            catch (IOException) { }
+            finally { DecodeGate.Release(); }
+            lock (_gate)
+            {
+                _loading.Remove(key);
+                _cache[key] = bitmap;
+                _eviction.Enqueue(key);
+                TrimCache();
+            }
+            onLoaded();
+        });
+        return false;
+    }
+
+    // The icon sheet is shared by every box icon, so it is loaded once and never evicted.
+    private SKBitmap? _iconSheet;
+    private bool _iconSheetLoading, _iconSheetMissing;
+    private readonly List<Action> _iconSheetWaiters = [];
+
+    public bool TryGetShowdownIcon(SpriteLook look, Action onLoaded, out SKBitmap? sheet, out SKRectI cell)
+    {
+        sheet = null;
+        cell = default;
+        if (ShowdownCatalog.IconCell(look) is not { } found) return true;
+        cell = new SKRectI(found.X, found.Y, found.X + found.Width, found.Y + found.Height);
+        lock (_gate)
+        {
+            if (_iconSheet is not null) { sheet = _iconSheet; return true; }
+            if (_iconSheetMissing) return true;
+            if (_iconSheetWaiters.Count < 512) _iconSheetWaiters.Add(onLoaded);
+            if (_iconSheetLoading) return false;
+            _iconSheetLoading = true;
+        }
+
+        Task.Run(async () =>
+        {
+            SKBitmap? bitmap = null;
+            try
+            {
+                await using var stream = await FileSystem.OpenAppPackageFileAsync(ShowdownCatalog.IconSheetPath).ConfigureAwait(false);
+                bitmap = SKBitmap.Decode(stream);
+            }
+            catch (Exception error) when (error is IOException or FileNotFoundException) { }
+            Action[] waiting;
+            lock (_gate)
+            {
+                _iconSheet = bitmap;
+                _iconSheetMissing = bitmap is null; // unreadable: PKHeX's icons from then on
+                waiting = [.. _iconSheetWaiters.Distinct()];
+                _iconSheetWaiters.Clear();
+            }
+            foreach (var invalidate in waiting) invalidate();
+        });
+        return false;
     }
 
     public bool TryGetBdspIcon(SpriteLook look, Action onLoaded, out SKBitmap? icon)

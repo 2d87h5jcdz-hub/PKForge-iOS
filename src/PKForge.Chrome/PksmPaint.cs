@@ -111,12 +111,12 @@ public static class PksmPaint
         using (var outline = Paint(Pksm.ButtonBlueDeep)) c.DrawRoundRect(r, 4, 4, outline);
         var inner = SKRect.Inflate(r, -1.5f, -1.5f);
         Vertical(c, inner, 3, Lighter(body, 0.16f), Darker(body, 0.1f));
-        using (var light = Paint(SKColors.White.WithAlpha(0x16)))
+        using (var light = Paint(ColorTheme.Current.Bright.WithAlpha(0x16)))
             c.DrawRoundRect(new SKRect(inner.Left + 1, inner.Top + 1, inner.Right - 1, inner.MidY), 2, 2, light);
         var baseline = r.MidY + font.Size * 0.35f;
         using (var sh = new SKPaint { Color = Pksm.LogoVoid.WithAlpha(0x90) })
             c.DrawText(label, r.Left + 10 + 1, baseline + 1, SKTextAlign.Left, font, sh);
-        using var ink = new SKPaint { Color = SKColors.White };
+        using var ink = new SKPaint { Color = ColorTheme.Current.Bright };
         c.DrawText(label, r.Left + 10, baseline, SKTextAlign.Left, font, ink);
     }
 
@@ -223,12 +223,12 @@ public static class PksmPaint
         using (var outline = Paint(Pksm.ButtonBlueDeep)) c.DrawRoundRect(r, 4, 4, outline);
         var inner = SKRect.Inflate(r, -1.5f, -1.5f);
         Vertical(c, inner, 3, Lighter(Pksm.HeaderBlue, 0.16f), Darker(Pksm.HeaderBlue, 0.1f));
-        using (var light = Paint(SKColors.White.WithAlpha(0x16)))
+        using (var light = Paint(ColorTheme.Current.Bright.WithAlpha(0x16)))
             c.DrawRoundRect(new SKRect(inner.Left + 1, inner.Top + 1, inner.Right - 1, inner.MidY), 2, 2, light);
         var baseline = inner.MidY + font.Size * 0.35f;
         using (var sh = new SKPaint { Color = Pksm.LogoVoid.WithAlpha(0x90) })
             c.DrawText(label, inner.MidX + 1, baseline + 1, SKTextAlign.Center, font, sh);
-        using (var ink = new SKPaint { Color = SKColors.White })
+        using (var ink = new SKPaint { Color = ColorTheme.Current.Bright })
             c.DrawText(label, inner.MidX, baseline, SKTextAlign.Center, font, ink);
 
         var capWidth = inner.Height * 1.15f;

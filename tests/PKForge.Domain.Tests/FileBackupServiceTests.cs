@@ -63,6 +63,36 @@ public sealed class FileBackupServiceTests : IDisposable
         Assert.DoesNotContain(listed, x => x.BackupId == first.BackupId);
     }
 
+    [Fact]
+    public async Task EachSaveKeepsItsOwnRestorePoints()
+    {
+        var service = new FileBackupService(_root, maxVersions: 2);
+        var emerald = await service.CreateAsync(Snapshot([1], "emerald.sav"), documentId: "doc:emerald");
+        for (var i = 0; i < 3; i++)
+            await service.CreateAsync(Snapshot([(byte)(2 + i)], "platinum.sav"), documentId: "doc:platinum");
+
+        var listed = await service.ListAsync();
+        // Three writes to Platinum keep its newest two and never push out Emerald's only point.
+        Assert.Contains(listed, x => x.BackupId == emerald.BackupId && x.DocumentId == "doc:emerald");
+        Assert.Equal(2, listed.Count(x => x.DocumentId == "doc:platinum"));
+    }
+
+    [Fact]
+    public void ARestorePointBelongsOnlyToItsOwnSave()
+    {
+        var open = Snapshot([1], "emerald.sav");
+        var own = new BackupInfo("a", DateTimeOffset.UtcNow, "", "emerald.sav", "PKM Test", 7, 1, DocumentId: "doc:emerald");
+        var other = own with { DocumentId = "doc:other" };
+        Assert.True(own.BelongsTo("doc:emerald", open));
+        Assert.False(other.BelongsTo("doc:emerald", open));
+
+        // A point from before restore points recorded their file matches by format, generation and name.
+        var legacy = own with { DocumentId = null };
+        Assert.True(legacy.BelongsTo("doc:emerald", open));
+        Assert.False((legacy with { Generation = 4 }).BelongsTo("doc:emerald", open));
+        Assert.False((legacy with { DisplayName = "platinum.sav" }).BelongsTo("doc:emerald", open));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);

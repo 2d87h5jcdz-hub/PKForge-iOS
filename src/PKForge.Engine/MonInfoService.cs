@@ -26,9 +26,14 @@ public sealed class MonInfoService : IMonInfoService
         var save = engine.SaveFile;
         var context = save.Context;
         PKM? stored = null;
-        try { stored = engine.GetEntity(box, slot); }
-        catch (ArgumentException) { }
-        var learn = stored is { Species: > 0 } ? LearnSources(stored, species, form, save) : new Dictionary<int, MoveLearn>();
+        if (box != IMonInfoService.NoSlot)
+        {
+            try { stored = engine.GetEntity(box, slot); }
+            catch (ArgumentException) { }
+        }
+        var learn = stored is { Species: > 0 } ? LearnSources(stored, species, form, save)
+            : species is > 0 ? SpeciesLearnSources(save, species.Value, form ?? 0)
+            : new Dictionary<int, MoveLearn>();
 
         var dummied = MoveInfo.GetDummiedMovesHashSet(context);
         var types = MoveInfo.GetTypeTable(context);
@@ -105,6 +110,46 @@ public sealed class MonInfoService : IMonInfoService
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or IndexOutOfRangeException)
         {
             return FallbackLearnset(pk, save);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// What a species learns in this game before any Pokémon of it exists (the creation
+    /// wizard): its level-up moves with their levels, then machines, tutors and egg moves,
+    /// from PKHeX's learn source for the game. Moves only a pre-evolution learns are not
+    /// included; the legalizer still has the last word on the moveset.
+    /// </summary>
+    internal static Dictionary<int, MoveLearn> SpeciesLearnSources(SaveFile save, int species, int form)
+    {
+        var result = new Dictionary<int, MoveLearn>();
+        try
+        {
+            var pk = save.BlankPKM;
+            pk.Species = (ushort)species;
+            pk.Form = (byte)Math.Max(0, form);
+            pk.CurrentLevel = 100;
+            var source = GameData.GetLearnSource(save.Version);
+            var evo = new EvoCriteria { Species = pk.Species, Form = pk.Form, LevelMax = 100, LevelMin = 1 };
+            var flags = new bool[save.MaxMoveID + 1];
+            var learnset = LearnsetFor(save.Version, pk.Species, pk.Form);
+            void Mark(MoveSourceType type, Func<int, MoveLearn> kind)
+            {
+                Array.Clear(flags);
+                source.GetAllMoves(flags, pk, evo, type);
+                for (var move = 1; move < flags.Length; move++)
+                    if (flags[move] && !result.ContainsKey(move)) result[move] = kind(move);
+            }
+            Mark(MoveSourceType.LevelUp, move => new MoveLearn(LearnKind.LevelUp,
+                learnset is not null && learnset.TryGetLevelLearnMove((ushort)move, out var level) ? level : 0));
+            Mark(MoveSourceType.AllMachines, _ => new MoveLearn(LearnKind.Machine));
+            Mark(MoveSourceType.AllTutors, _ => new MoveLearn(LearnKind.Tutor));
+            foreach (var egg in source.GetEggMoves(pk.Species, pk.Form))
+                result.TryAdd(egg, new MoveLearn(LearnKind.Egg));
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or IndexOutOfRangeException)
+        {
+            // An unknown species for this game: no learn data, the plain list stands in.
         }
         return result;
     }
@@ -254,7 +299,7 @@ public sealed class MonInfoService : IMonInfoService
             return new SpeciesCard(species, form, session.GetSpeciesTypes(species), session.GetBaseStats(species), abilities, null);
 
         var p = engine.SaveFile.Personal.GetFormEntry((ushort)species, (byte)Math.Max(0, form));
-        IReadOnlyList<int> types = p.Type1 == p.Type2 ? [p.Type1] : [p.Type1, p.Type2];
+        IReadOnlyList<int> types = PersonalTypes.Of(p);
         return new SpeciesCard(species, form, types, new BaseStats(p.HP, p.ATK, p.DEF, p.SPA, p.SPD, p.SPE),
             abilities, engine.Generation >= 2 ? new GenderRatio(p.Gender) : null);
     }

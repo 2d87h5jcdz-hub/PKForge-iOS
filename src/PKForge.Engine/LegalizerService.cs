@@ -252,7 +252,7 @@ public sealed class LegalizerService : ILegalizerService
             made = TryKeep(made, pk => pk.Ball = current.Ball);
             if (current.CurrentLevel > made.CurrentLevel) made = TryKeep(made, pk => { pk.CurrentLevel = current.CurrentLevel; pk.ResetPartyStats(); });
             if (moves.Length > 0) made = TryKeep(made, pk => { pk.SetMoves(moves); pk.HealPP(); });
-            if (current.IsNicknamed) made = TryKeep(made, pk => { pk.IsNicknamed = true; pk.Nickname = current.Nickname; });
+            if (current.IsNicknamed) made = TryKeep(made, pk => pk.SetNickname(current.Nickname));
             return made;
         }
         return null;

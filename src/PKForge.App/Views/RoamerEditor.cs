@@ -41,13 +41,13 @@ public static class RoamerEditor
         var actions = new List<PadOption>();
         if (roamer.CanReroll)
         {
-            actions.Add(new PadOption(Reroll, IconPath: "dice"));
-            actions.Add(new PadOption(RerollShiny, IconPath: "shiny", Accent: UiTokens.Gold));
+            actions.Add(new PadOption(Reroll, IconPath: "dice", Detail: "New random PID and IVs, made the way the game makes them."));
+            actions.Add(new PadOption(RerollShiny, IconPath: "shiny", Accent: UiTokens.Gold, Detail: "Rerolls until it comes out shiny; it stays legal to catch."));
         }
         if (roamer.Generation == 6)
         {
-            actions.Add(new PadOption(SetState, IconPath: "map"));
-            actions.Add(new PadOption(Times, IconPath: "records"));
+            actions.Add(new PadOption(SetState, IconPath: "map", Detail: "Whether the bird is roaming, waiting, defeated or captured."));
+            actions.Add(new PadOption(Times, IconPath: "records", Detail: "How many times you have run into it."));
         }
         if (actions.Count == 0)
         {

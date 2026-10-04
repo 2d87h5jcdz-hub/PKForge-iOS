@@ -32,9 +32,12 @@ public static class ClockRepairEditor
             if (await WorldEventsMenu.BlockedAsync(host, "Clock repair", detail, Action)) return;
 
             var choice = await EditorMenu.ShowAsync(host, "Clock repair", detail,
-                new PadOption(Reset, Accent: UiTokens.Green, IconPath: "restore"),
-                new PadOption(BerryFix, IconPath: "fix", Accent: WorldEventsMenu.Good(state.BerryFixApplied)),
-                new PadOption(ArmReset, IconPath: "calendar", Accent: WorldEventsMenu.Good(state.ResetArmed)),
+                new PadOption(Reset, Accent: UiTokens.Green, IconPath: "restore",
+                    Detail: "Berries and daily events restart from now; use after a dead battery."),
+                new PadOption(BerryFix, IconPath: "fix", Accent: WorldEventsMenu.Good(state.BerryFixApplied),
+                    Detail: "For Ruby and Sapphire berries that stopped growing after a year."),
+                new PadOption(ArmReset, IconPath: "calendar", Accent: WorldEventsMenu.Good(state.ResetArmed),
+                    Detail: "The game shows its own clock setting screen on next start."),
                 new PadOption(Explain, IconPath: "info"));
             switch (choice)
             {

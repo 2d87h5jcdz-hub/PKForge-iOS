@@ -21,12 +21,6 @@ namespace PKForge.App.Views;
 /// </summary>
 public sealed class SecondScreenBoxPage : ContentPage
 {
-    /// <summary>English type names by PKHeX type id (stable across generations).</summary>
-    private static readonly string[] TypeNames =
-    [
-        "Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel",
-        "Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark", "Fairy",
-    ];
 
     private readonly BoxBrowserViewModel _viewModel;
     private readonly ISpriteService _sprites;
@@ -39,8 +33,6 @@ public sealed class SecondScreenBoxPage : ContentPage
     private Func<Task>? _swapAsync;
     private bool _cleanedUp;
 
-    private long _animElapsedMs;
-    private IDispatcherTimer? _animTimer;
 
     public SecondScreenBoxPage(BoxBrowserViewModel viewModel, ISpriteService sprites, ThemeService theme)
     {
@@ -54,17 +46,17 @@ public sealed class SecondScreenBoxPage : ContentPage
         var sessions = services?.GetService<Domain.ISaveSessionService>();
 
         // The inspector: the Gen-6 summary surface, a light-blue world carrying white panels.
-        _inspector = new MonSummaryView(sprites);
+        _inspector = new MonSummaryView(sprites)
+        {
+            FixHint = "Press + > Legalize this one to find the closest legal version. Its PID, nature or IVs may change.",
+        };
         if (state is not null)
         {
             _inspector.SetPage(state.InspectorPage);
             _inspector.PageChanged += page => state.InspectorPage = page;
         }
-        var summary = new Grid
-        {
-            Padding = new Thickness(14, 12),
-            Children = { _inspector },
-        };
+        // The summary is drawn for this screen's full 1240×1080 and runs to its edges.
+        var summary = new Grid { Children = { _inspector } };
 
         // A purpose-built game banner replaces inconsistent third-party hero art and covers every title.
         var hero = new GameHeroBackdrop { IsVisible = false };
@@ -76,9 +68,8 @@ public sealed class SecondScreenBoxPage : ContentPage
             VerticalOptions = LayoutOptions.Center,
             Children =
             {
-                PksmIcons.Icon("storage", 64),
+                new Image { Source = ThemeLogo.Source(), WidthRequest = 96, HeightRequest = 96, HorizontalOptions = LayoutOptions.Center },
                 new Label { Text = "PKFORGE", TextColor = UiTokens.Ink0, FontSize = 22, FontAttributes = FontAttributes.Bold, CharacterSpacing = 4, HorizontalTextAlignment = TextAlignment.Center },
-                new Label { Text = "POKéMON STORAGE SYSTEM", TextColor = UiTokens.Ink1, FontSize = 11, CharacterSpacing = 2, HorizontalTextAlignment = TextAlignment.Center },
             },
         };
 
@@ -104,7 +95,7 @@ public sealed class SecondScreenBoxPage : ContentPage
             {
                 case "✓" or "✗":
                     return built.WithLegality(_viewModel.LegalityBadge == "✓",
-                        (_viewModel.LegalityText ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries));
+                        (_viewModel.LegalityText ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries), _viewModel.LegalityChecks);
                 default:
                     pending = session.SupportsLegalityAnalysis;
                     return built;
@@ -185,8 +176,6 @@ public sealed class SecondScreenBoxPage : ContentPage
             if (showRoute) routeMap.Show(state!.AutopilotRoute);
             routeMap.IsVisible = showRoute;
             idle.IsVisible = !showJournal && !showDex && !showOverview && !showSummary && !showHero && !showRoute;
-            _dexVisible = showDex;
-            SetAnimating(showDex);
             PerfTrace.Log("second.swap", swapWatch);
         }
 
@@ -284,34 +273,8 @@ public sealed class SecondScreenBoxPage : ContentPage
         if (_journalState is not null && _journalHandler is not null)
             _journalState.PropertyChanged -= _journalHandler;
         _swapAsync = null;
-        SetAnimating(false);
     }
 
-
-    // Whether the dex view is showing, and whether its sprite is an animated GIF (vs a
-    // static render): the timer only repaints a canvas that is both visible AND animated.
-    // The inspector runs its own loop.
-    private bool _dexVisible, _dexAnimated;
-
-    /// <summary>The GIF loop only ticks while an animated Pokémon is actually on screen.</summary>
-    private void SetAnimating(bool on)
-    {
-        if (!on)
-        {
-            _animTimer?.Stop();
-            _animTimer = null;
-            return;
-        }
-        if (_animTimer is not null) return;
-        _animTimer = Dispatcher.CreateTimer();
-        _animTimer.Interval = TimeSpan.FromMilliseconds(40);
-        _animTimer.Tick += (_, _) =>
-        {
-            _animElapsedMs += 40;
-            if (_dexVisible && _dexAnimated) _dexSprite.InvalidateSurface();
-        };
-        _animTimer.Start();
-    }
 
     // ── The box overview (while the full-screen summary owns the details) ──
 
@@ -388,167 +351,15 @@ public sealed class SecondScreenBoxPage : ContentPage
 
     // ── The logo-deck Pokédex view (species preview while the picker is open) ──
 
-    private static readonly string[] RomanGens = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"];
-    private static readonly string[] RegionNames = ["Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Kalos", "Alola", "Galar", "Paldea"];
-    private static readonly (int First, int Last)[] GenBounds =
-        [(1, 151), (152, 251), (252, 386), (387, 493), (494, 649), (650, 721), (722, 809), (810, 905), (906, 1025)];
+    private DexEntryView _dexEntry = null!;
 
-    private SKCanvasView _dexSprite = null!;
-    private int _dexSpecies;
-    private readonly Label _dexName = new() { TextColor = UiTokens.Ink0, FontSize = 24, FontAttributes = FontAttributes.Bold, CharacterSpacing = 1 };
-    private readonly Label _dexNumber = new() { TextColor = UiTokens.InkSoft, FontSize = 13 };
-    private readonly Label _dexOrigin = new() { TextColor = UiTokens.InkSoft, FontSize = 12 };
-    private readonly HorizontalStackLayout _dexTypes = new() { Spacing = 6 };
-    private readonly ProgressBar[] _dexStatBars = new ProgressBar[6];
-    private readonly Label[] _dexStatValues = new Label[6];
-
-    /// <summary>The handheld dex translated into the logo's cobalt hardware language.</summary>
+    /// <summary>The species' Pokédex page, in the summary's layout.</summary>
     private View BuildDexView()
     {
-        _dexSprite = new SKCanvasView();
-        _dexSprite.PaintSurface += PaintDexSprite;
-
-        // Top-left hardware charm: the blue lens and three status LEDs.
-        var lens = new Ellipse { WidthRequest = 26, HeightRequest = 26, Fill = new SolidColorBrush(UiTokens.BagCyanEdge), Stroke = new SolidColorBrush(UiTokens.SelectBorder), StrokeThickness = 2 };
-        var leds = new HorizontalStackLayout
-        {
-            Spacing = 6,
-            VerticalOptions = LayoutOptions.Center,
-            Children = { lens, Kit.StatusLight(Color.FromArgb("#E4514F"), 8), Kit.StatusLight(UiTokens.Yellow, 8), Kit.StatusLight(UiTokens.Green, 8) },
-        };
-
-        var screen = new Border
-        {
-            BackgroundColor = UiTokens.ShellPress,
-            Stroke = UiTokens.SelectBorder,
-            StrokeThickness = 3,
-            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
-            Padding = 6,
-            Content = _dexSprite,
-        };
-
-        var statNames = new[] { "HP", "ATK", "DEF", "SPA", "SPD", "SPE" };
-        var statsGrid = new Grid { RowSpacing = 3, ColumnSpacing = 8 };
-        statsGrid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(34)));
-        statsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
-        statsGrid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(30)));
-        for (var i = 0; i < 6; i++)
-        {
-            statsGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-            var caption = new Label { Text = statNames[i], TextColor = UiTokens.InkSoft, FontSize = 10, FontAttributes = FontAttributes.Bold };
-            _dexStatBars[i] = new ProgressBar { ProgressColor = UiTokens.BagCyanEdge, BackgroundColor = UiTokens.ShellPress, VerticalOptions = LayoutOptions.Center };
-            _dexStatValues[i] = new Label { TextColor = UiTokens.Ink0, FontSize = 10, FontAttributes = FontAttributes.Bold, HorizontalTextAlignment = TextAlignment.End };
-            statsGrid.Add(caption); Grid.SetRow(caption, i);
-            statsGrid.Add(_dexStatBars[i]); Grid.SetRow(_dexStatBars[i], i); Grid.SetColumn(_dexStatBars[i], 1);
-            statsGrid.Add(_dexStatValues[i]); Grid.SetRow(_dexStatValues[i], i); Grid.SetColumn(_dexStatValues[i], 2);
-        }
-
-        var info = new Border
-        {
-            BackgroundColor = UiTokens.ShellPress,
-            Stroke = UiTokens.SelectBorder,
-            StrokeThickness = 3,
-            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 10 },
-            Padding = 12,
-            Content = new VerticalStackLayout
-            {
-                Spacing = 7,
-                Children = { _dexName, _dexNumber, _dexTypes, _dexOrigin, statsGrid },
-            },
-        };
-
-        var body = new Grid
-        {
-            RowSpacing = 8,
-            ColumnSpacing = 12,
-            RowDefinitions = [new(GridLength.Auto), new(GridLength.Star)],
-            ColumnDefinitions = [new(GridLength.Star), new(GridLength.Star)],
-            Children = { leds, screen, info },
-        };
-        Grid.SetRow(screen, 1);
-        Grid.SetRow(info, 1);
-        Grid.SetColumn(info, 1);
-
-        var shell = new Border
-        {
-            BackgroundColor = UiTokens.Maroon,
-            Stroke = UiTokens.BagCyanEdge,
-            StrokeThickness = 3,
-            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 18 },
-            Padding = 14,
-            Margin = new Thickness(18, 12),
-            Content = body,
-        };
-        return new Grid { IsVisible = false, Children = { shell } };
+        _dexEntry = new DexEntryView(_sprites);
+        return new Grid { IsVisible = false, Children = { _dexEntry } };
     }
 
-    private void UpdateDex(int species)
-    {
-        _dexSpecies = species;
-        var services = IPlatformApplication.Current?.Services;
-        var data = services?.GetService<Domain.IGameDataService>();
-        var session = services?.GetService<Domain.ISaveSessionService>()?.CurrentSession;
+    private void UpdateDex(int species) => _dexEntry.Show(species);
 
-        _dexName.Text = data is not null && species < data.SpeciesNames.Count ? data.SpeciesNames[species] : $"#{species}";
-        _dexNumber.Text = $"No. {species:000}";
-
-        var genIndex = Array.FindIndex(GenBounds, b => species >= b.First && species <= b.Last);
-        _dexOrigin.Text = genIndex >= 0 ? $"First seen in Generation {RomanGens[genIndex]} · {RegionNames[genIndex]}" : "";
-
-        _dexTypes.Children.Clear();
-        if (session is not null)
-        {
-            foreach (var type in session.GetSpeciesTypes(species))
-            {
-                var typeName = (uint)type < (uint)TypeNames.Length ? TypeNames[type] : $"?{type}";
-                _dexTypes.Children.Add(new Border
-                {
-                    BackgroundColor = TypePalette.ForType(type),
-                    StrokeThickness = 0,
-                    StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 5 },
-                    Padding = new Thickness(9, 2),
-                    Content = new Label { Text = typeName, TextColor = Colors.White, FontSize = 10, FontAttributes = FontAttributes.Bold },
-                });
-            }
-
-            var stats = session.GetBaseStats(species);
-            var values = new[] { stats.Hp, stats.Atk, stats.Def, stats.SpA, stats.SpD, stats.Spe };
-            for (var i = 0; i < 6; i++)
-            {
-                _dexStatBars[i].Progress = Math.Min(1.0, values[i] / 180.0);
-                _dexStatValues[i].Text = values[i].ToString();
-            }
-        }
-        _dexSprite.InvalidateSurface();
-    }
-
-    private void PaintDexSprite(object? sender, SKPaintSurfaceEventArgs args)
-    {
-        var canvas = args.Surface.Canvas;
-        canvas.Clear(Pksm.PaperShade);
-        _dexAnimated = false;
-        if (_dexSpecies <= 0) return;
-
-        if (!_sprites.TryGetShowdown(new SpriteLook(_dexSpecies, 0, false), out var animated))
-        {
-            _sprites.WarmShowdown(new SpriteLook(_dexSpecies, 0, false), () => MainThread.BeginInvokeOnMainThread(_dexSprite.InvalidateSurface));
-            return;
-        }
-        _dexAnimated = animated is not null;
-        var bitmap = animated?.FrameAt(_animElapsedMs) ?? _sprites.GetSprite(_dexSpecies, 0, false);
-        if (bitmap is null)
-        {
-            _sprites.Warm(_dexSpecies, 0, false, () => MainThread.BeginInvokeOnMainThread(_dexSprite.InvalidateSurface));
-            return;
-        }
-
-        var info = args.Info;
-        var box = Math.Min(info.Width, info.Height) * 0.8f;
-        var scale = Math.Min(box / bitmap.Width, box / bitmap.Height);
-        var w = bitmap.Width * scale;
-        var h = bitmap.Height * scale;
-        var dest = new SKRect(info.Width / 2f - w / 2, info.Height / 2f - h / 2, info.Width / 2f + w / 2, info.Height / 2f + h / 2);
-        using var image = SKImage.FromBitmap(bitmap);
-        canvas.DrawImage(image, dest, new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
-    }
 }

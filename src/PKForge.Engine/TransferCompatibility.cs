@@ -22,8 +22,15 @@ public static class TransferCompatibility
         ArgumentNullException.ThrowIfNull(entityBytes);
         var context = Enum.TryParse<EntityContext>(targetFormat, out var parsed) ? parsed : EntityContext.None;
         var entity = EntityBytes.Parse(entityBytes, format, context);
+        if ((entity is null || entity.Species == 0) && RadicalRed.CfruEntity.Recognize(format) is { } cfru)
+            return $"{nickname} cannot go to {targetLabel}. " + (RadicalRed.CfruEntity.Pk3Refusal(entityBytes, cfru) is { } why
+                ? $"{why} Only {RadicalRed.CfruEntity.GameName(cfru)} can take it."
+                : $"It is a {RadicalRed.CfruEntity.GameName(cfru)} Pokémon with no Generation 3 counterpart, so only {RadicalRed.CfruEntity.GameName(cfru)} can take it.");
         if (entity is null || entity.Species == 0)
             return $"{nickname} is not a readable Pokémon file.";
+        // A CFRU game takes a PK3 only when every id has a twin in its own tables.
+        if (RadicalRed.CfruEntity.ImportRefusal(entity, targetFormat) is { } hackRefusal)
+            return $"{nickname} cannot go to {targetLabel}. {hackRefusal}";
 
         var target = TargetFor(context, targetGeneration);
         if (target is null)

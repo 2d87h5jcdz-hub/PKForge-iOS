@@ -87,9 +87,9 @@ public static class LegalityAssistUi
     public static Color? VerdictColor(MoveVerdict? verdict, Color? fallback) =>
         verdict is null || verdict.Move == 0 ? fallback : verdict.Valid ? UiTokens.Green : UiTokens.Bad;
 
-    /// <summary>The verdict tail for a move row: "Legal · Level Up" or "Not legal · Invalid Move".</summary>
+    /// <summary>The verdict tail for a move row: "Legal · Level Up" or "Illegal · Invalid Move".</summary>
     public static string VerdictText(MoveVerdict? verdict) =>
-        verdict is null || verdict.Move == 0 ? "" : verdict.Valid ? $"Legal · {verdict.Reason}" : $"Not legal · {verdict.Reason}";
+        verdict is null || verdict.Move == 0 ? "" : verdict.Valid ? $"Legal · {verdict.Reason}" : $"Illegal · {verdict.Reason}";
 }
 
 /// <summary>
@@ -123,7 +123,7 @@ public static class LegalityReportEditor
             foreach (var group in report.Groups)
                 options.Add(GroupOption(group));
 
-            var verdict = !report.Supported ? "Not analyzed" : report.Valid ? "Legal" : "Not legal";
+            var verdict = !report.Supported ? "Not analyzed" : report.Valid ? "Legal" : "Illegal";
             var message = report.Encounter.Length > 0 ? $"{verdict} · matched: {report.Encounter}" : verdict;
             var choice = await EditorMenu.ShowAsync(host, "Legality report", message, options.ToArray());
             if (choice is null) return dirty;

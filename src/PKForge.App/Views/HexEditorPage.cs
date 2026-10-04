@@ -302,9 +302,9 @@ public sealed class HexEditorPage : IPadHandler
     private async Task ShowActionsAsync()
     {
         var undoLabel = $"Undo all changes ({_edits.Count})";
-        var options = new List<PadOption> { new("Jump to offset", IconPath: "search") };
+        var options = new List<PadOption> { new("Jump to offset", IconPath: "search", Detail: "Go to a byte by its position, in hex (0x) or decimal.") };
         if (_edits.Count > 0)
-            options.Add(new PadOption(undoLabel, IconPath: "restore"));
+            options.Add(new PadOption(undoLabel, IconPath: "restore", Detail: "Drop every byte change not yet written to the save."));
         options.Add(new PadOption("Close", IconPath: "close"));
 
         var choice = await PadMenu.ShowAsync(_host, "Byte editor", $"{_edits.Count} byte(s) changed.", options.ToArray());

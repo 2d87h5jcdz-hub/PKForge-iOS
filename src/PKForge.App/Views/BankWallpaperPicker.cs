@@ -141,7 +141,7 @@ public sealed class BankWallpaperPicker : IPadPagingHandler
 
         using var title = new SKFont(_face, 22 * _density);
         using var small = new SKFont(_face, 15 * _density);
-        PksmPaint.CenterText(canvas, _title, 16 * _density, 24 * _density, title, SKColors.White, Pksm.LogoVoid);
+        PksmPaint.CenterText(canvas, _title, 16 * _density, 24 * _density, title, ColorTheme.Current.Bright, Pksm.LogoVoid);
 
         var hint = 40 * _density;
         var area = new SKRect(0, 44 * _density, info.Width, info.Height - hint);

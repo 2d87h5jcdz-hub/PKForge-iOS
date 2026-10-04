@@ -1,4 +1,5 @@
 using PKForge.Domain;
+using PKForge.Engine.RadicalRed;
 using PKHeX.Core;
 
 namespace PKForge.Engine;
@@ -31,6 +32,12 @@ public static class PksmEntityConversion
     /// </summary>
     public static Decoded Decode(int? generation, bool letsGo, byte[] data, string sourceName)
     {
+        // A ROM hack's own record (.pk3rr, .pk3ub, .pk3gsc) enters the bank as it is.
+        if (generation is null && CfruEntity.Recognize(Path.GetExtension(sourceName)) is { } cfru)
+            return CfruEntity.Describe(data, cfru, sourceName) is { } described
+                ? new(data.ToArray(), described, null)
+                : new(null, null, $"not a {CfruEntity.GameName(cfru)} Pokémon");
+
         PKM? pk;
         try
         {
@@ -105,6 +112,8 @@ public static class PksmEntityConversion
     public static Encoded Encode(byte[] bankBytes, string? format = null)
     {
         var pk = EntityBytes.Parse(bankBytes, format);
+        if ((pk is null || pk.Species == 0) && EntityBytes.RomHackGame(format) is { } hack)
+            return new(0, false, null, $"a {hack} Pokémon with no Generation 3 counterpart");
         if (pk is null || pk.Species == 0)
             return new(0, false, null, "not a readable Pokémon");
 

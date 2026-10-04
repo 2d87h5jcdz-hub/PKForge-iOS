@@ -155,20 +155,21 @@ internal static class RadicalRedData
         return species is > 0 && _species!.ContainsKey(species);
     }
 
-    /// <summary>Radical Red species id for a species NAME. Form slots duplicate their
-    /// base name; the lowest id of a duplicate wins (the base form).</summary>
+    /// <summary>Radical Red species id for a species NAME, matched blind to case, punctuation
+    /// and gender symbols ("Nidoran-F" is PKHeX's "Nidoran♀", "Farfetch'd" its "Farfetch’d").
+    /// Form slots duplicate their base name; the lowest id of a duplicate wins (the base form).</summary>
     public static int SpeciesIdByName(string name)
     {
         if (name.Length == 0) return 0;
         if (_speciesByName is null)
         {
             LoadSpecies();
-            _speciesByName = new Dictionary<string, int>(_species!.Count, StringComparer.OrdinalIgnoreCase);
+            var byName = new Dictionary<string, int>(_species!.Count, StringComparer.Ordinal);
             foreach (var entry in _species.Keys.Order())
-                if (!_speciesByName.ContainsKey(_species[entry]))
-                    _speciesByName[_species[entry]] = entry;
+                byName.TryAdd(UnboundData.NormalizeName(_species[entry]), entry);
+            _speciesByName = byName;
         }
-        return _speciesByName.TryGetValue(name, out var species) ? species : 0;
+        return _speciesByName.TryGetValue(UnboundData.NormalizeName(name), out var species) ? species : 0;
     }
 
     /// <summary>The national species id behind a Radical Red species id, or 0 when the
@@ -179,11 +180,11 @@ internal static class RadicalRedData
         LoadStrings();
         if (!IsKnownSpecies(species)) return 0;
         var name = SpeciesName(species);
-        if (_nationalByName!.TryGetValue(name, out var national)) return national;
+        if (_nationalByName!.TryGetValue(UnboundData.NormalizeName(name), out var national)) return national;
         while (name.Contains('-'))
         {
             name = name[..name.LastIndexOf('-')];
-            if (_nationalByName.TryGetValue(name, out national)) return national;
+            if (_nationalByName.TryGetValue(UnboundData.NormalizeName(name), out national)) return national;
         }
         return 0;
     }
@@ -275,10 +276,11 @@ internal static class RadicalRedData
         {
             if (_nationalByName is not null) return;
             var strings = GameInfo.GetStrings("en");
-            var national = new Dictionary<string, int>(strings.specieslist.Length, StringComparer.OrdinalIgnoreCase);
+            // Keyed like SpeciesIdByName, so "Nidoran-F" and "Farfetch'd" find their national twins.
+            var national = new Dictionary<string, int>(strings.specieslist.Length, StringComparer.Ordinal);
             for (var id = 1; id < strings.specieslist.Length; id++)
-                if (strings.specieslist[id].Length > 0 && !national.ContainsKey(strings.specieslist[id]))
-                    national[strings.specieslist[id]] = id;
+                if (strings.specieslist[id].Length > 0)
+                    national.TryAdd(UnboundData.NormalizeName(strings.specieslist[id]), id);
             _speciesList = strings.specieslist;
             _moveList = strings.movelist;
             _abilityList = strings.abilitylist;
