@@ -217,8 +217,7 @@ docs/                       architecture, bank model, development, art direction
   hero banners for the game library (community submissions; see
   [game art attribution](src/PKForge.App/Resources/GameArt/ATTRIBUTION.md))
 - [Pokémon Showdown](https://pokemonshowdown.com) by [Smogon](https://www.smogon.com) and
-  the artists of its sprite projects, front sprites and box icons, used with permission (see
-  [Showdown attribution](src/PKForge.App/Resources/Showdown/ATTRIBUTION.md))
+  the artists of its sprite projects, front sprites and box icons
 - [PokeAPI](https://pokeapi.co), item art fetched at runtime and cached on device
 - [game-icons.net](https://game-icons.net) (CC-BY 3.0, © Lorc, Delapouite, Guard13007,
   Carl Olsen and other contributing artists), UI symbols
