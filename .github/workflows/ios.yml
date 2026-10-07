@@ -20,13 +20,17 @@ jobs:
           XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
           sudo xcode-select -s "$XC"
           xcodebuild -version
+          echo "::notice::Xcodes: $(ls -d /Applications/Xcode*.app | xargs -n1 basename | tr '\n' ' ') | usando $(basename $XC)"
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          # A banda 10.0.1xx traz o workload iOS feito para o Xcode 26 (o runner ainda não tem o Xcode 27).
+          dotnet-version: 10.0.1xx
 
       - name: Instalar o workload MAUI para iOS
-        run: dotnet workload install maui-ios
+        run: |
+          dotnet workload install maui-ios
+          echo "::notice::$(dotnet --version) · $(dotnet workload list | grep -E 'ios|maui' | tr -s ' ' | tr '\n' ';')"
 
       - name: Compilar para iPhone (sem assinatura)
         run: |
