@@ -24,13 +24,30 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          # A banda 10.0.1xx traz o workload iOS feito para o Xcode 26 (o runner ainda não tem o Xcode 27).
-          dotnet-version: 10.0.1xx
+          dotnet-version: 10.0.x
 
-      - name: Instalar o workload MAUI para iOS
+      - name: Instalar o workload MAUI para iOS (versão feita para o Xcode 26)
         run: |
-          dotnet workload install maui-ios
-          echo "::notice::$(dotnet --version) · $(dotnet workload list | grep -E 'ios|maui' | tr -s ' ' | tr '\n' ';')"
+          # O workload mais novo já exige o SDK do iOS 27 (Xcode 27), que o runner ainda não tem.
+          # Procura o conjunto de workloads mais recente cujo SDK do iOS ainda seja o 26.x.
+          dotnet --version
+          dotnet workload search version --take 40 > sets.txt 2>&1 || true
+          head -50 sets.txt
+          PICK=""
+          for SET in $(grep -oE '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?' sets.txt); do
+            dotnet workload search version "$SET" > set.txt 2>&1 || continue
+            IOS=$(grep -iE 'microsoft\.net\.sdk\.ios\b' set.txt | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            echo "$SET -> iOS $IOS"
+            case "$IOS" in 26.*) PICK="$SET"; break;; esac
+          done
+          echo "::notice::Conjuntos: $(grep -oE '^[0-9.]+' sets.txt | head -12 | tr '\n' ' ') | escolhido: ${PICK:-nenhum}"
+          if [ -n "$PICK" ]; then
+            dotnet workload install maui-ios --version "$PICK"
+          else
+            cat set.txt | head -30
+            dotnet workload install maui-ios
+          fi
+          echo "::notice::$(dotnet workload list | grep -E 'ios|maui' | tr -s ' ' | tr '\n' ';')"
 
       - name: Compilar para iPhone (sem assinatura)
         run: |
