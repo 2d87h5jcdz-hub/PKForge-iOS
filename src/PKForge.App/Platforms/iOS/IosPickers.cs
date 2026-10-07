@@ -24,12 +24,21 @@ internal static class IosPicker
         public override void WasCancelled(UIDocumentPickerViewController controller) => Finish(done, []);
     }
 
+    /// <summary>Swiping the sheet down closes the picker without "Cancel": still a cancel for the app.</summary>
+    private sealed class DismissDelegate(TaskCompletionSource<NSUrl[]> done) : UIAdaptivePresentationControllerDelegate
+    {
+        public override void DidDismiss(UIPresentationController presentationController) => Finish(done, []);
+    }
+
+    private static DismissDelegate? _dismiss;
+
     private static void Finish(TaskCompletionSource<NSUrl[]> done, NSUrl[] urls)
     {
         Services.AppLog.Info("ios", $"Picker returned {urls.Length} item(s)");
         done.TrySetResult(urls);
         _picker = null;
         _delegate = null;
+        _dismiss = null;
     }
 
     public static Task<NSUrl[]> PickAsync(UTType[] types, bool multiple, CancellationToken cancellationToken) =>
@@ -45,6 +54,8 @@ internal static class IosPicker
             picker.Delegate = pickerDelegate;
             _picker = picker;
             _delegate = pickerDelegate;
+            _dismiss = new DismissDelegate(done);
+            if (picker.PresentationController is { } presentation) presentation.Delegate = _dismiss;
             cancellationToken.Register(() => MainThread.BeginInvokeOnMainThread(() =>
             {
                 picker.DismissViewController(true, null);

@@ -113,6 +113,10 @@ public static class MauiProgram
         builder.Services.AddTransient<SecondScreenBoxPage>();
         builder.Services.AddTransient<BankPage>();
         App.Trace("builder.Build()");
-        return builder.Build();
+        var app = builder.Build();
+#if IOS
+        IosStartup.EnsureDocumentsRoot(app.Services);
+#endif
+        return app;
     }
 }
