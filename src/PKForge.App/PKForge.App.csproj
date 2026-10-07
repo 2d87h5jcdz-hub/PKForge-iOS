@@ -4,6 +4,8 @@
          (no Linux/Windows o alvo iOS fica de fora, e o build Android segue igual ao original). -->
     <TargetFrameworks>net10.0-android</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('osx'))">$(TargetFrameworks);net10.0-ios</TargetFrameworks>
+    <!-- O CI do iOS compila só o alvo iOS (sem precisar do workload Android). -->
+    <TargetFrameworks Condition="'$(PKForgeIosOnly)' == 'true'">net10.0-ios</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <RootNamespace>PKForge.App</RootNamespace>
     <UseMaui>true</UseMaui>
