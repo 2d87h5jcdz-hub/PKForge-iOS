@@ -152,7 +152,11 @@ public sealed class BadAppleEgg : IPadHandler
         var theme = ColorTheme.Current;
         canvas.Clear(theme.Void);
         if (_closed || !_clock.IsRunning) return;
+#if ANDROID
         var ms = _song is { } song ? song.CurrentPosition : _clock.ElapsedMilliseconds;
+#else
+        var ms = _song is { } song ? (long)(song.CurrentTime * 1000) : _clock.ElapsedMilliseconds;
+#endif
         if (!_frames.SeekForward((int)(ms * _frames.Fps / 1000)))
         {
             if (_song is null) MainThread.BeginInvokeOnMainThread(Close);
