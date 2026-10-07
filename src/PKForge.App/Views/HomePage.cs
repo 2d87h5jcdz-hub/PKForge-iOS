@@ -81,6 +81,20 @@ public sealed class HomePage : ContentPage, IPadHandler
         };
         Grid.SetRow(_shelf, 1);
         BlockNativeFocus(_shelf);
+#if IOS
+        // iOS: a horizontal ScrollView measured while the shelf was empty keeps a zero content
+        // size, so cartridges added by a scan stay invisible. Reserve the cartridge height and
+        // re-measure the shelf whenever its games change.
+        _shelf.MinimumHeightRequest = 170;
+        _shelfItems.MinimumHeightRequest = 170;
+        _viewModel.Groups.CollectionChanged += (_, _) => Dispatcher.Dispatch(() =>
+        {
+            ((IView)_shelfItems).InvalidateMeasure();
+            ((IView)_shelf).InvalidateMeasure();
+            _shelf.Content = null;
+            _shelf.Content = _shelfItems;
+        });
+#endif
 
         // The three destinations as PKSM tiles with bundled pixel icons.
         var bank = new DsCard("bank", "Bank") { Tapped = () => _ = PushAsync<BankPage>() };
