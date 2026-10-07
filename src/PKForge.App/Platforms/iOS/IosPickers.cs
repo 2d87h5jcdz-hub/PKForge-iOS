@@ -8,6 +8,30 @@ namespace PKForge.App;
 /// <summary>Presents the Files app's picker and hands back the urls the player chose.</summary>
 internal static class IosPicker
 {
+    // UIKit holds the picker's delegate weakly. Without these strong references the managed
+    // delegate can be collected while the picker is open, and the pick never reaches the app.
+    private static UIDocumentPickerViewController? _picker;
+    private static PickerDelegate? _delegate;
+
+    private sealed class PickerDelegate(TaskCompletionSource<NSUrl[]> done) : UIDocumentPickerDelegate
+    {
+        public override void DidPickDocument(UIDocumentPickerViewController controller, NSUrl[] urls) =>
+            Finish(done, urls ?? []);
+
+        public override void DidPickDocument(UIDocumentPickerViewController controller, NSUrl url) =>
+            Finish(done, url is null ? [] : [url]);
+
+        public override void WasCancelled(UIDocumentPickerViewController controller) => Finish(done, []);
+    }
+
+    private static void Finish(TaskCompletionSource<NSUrl[]> done, NSUrl[] urls)
+    {
+        Services.AppLog.Info("ios", $"Picker returned {urls.Length} item(s)");
+        done.TrySetResult(urls);
+        _picker = null;
+        _delegate = null;
+    }
+
     public static Task<NSUrl[]> PickAsync(UTType[] types, bool multiple, CancellationToken cancellationToken) =>
         MainThread.InvokeOnMainThreadAsync(() =>
         {
@@ -15,17 +39,20 @@ internal static class IosPicker
             var picker = new UIDocumentPickerViewController(types, false)
             {
                 AllowsMultipleSelection = multiple,
-                ModalPresentationStyle = UIModalPresentationStyle.FormSheet,
+                ShouldShowFileExtensions = true,
             };
-            picker.DidPickDocumentAtUrls += (_, args) => done.TrySetResult(args.Urls ?? []);
-            picker.WasCancelled += (_, _) => done.TrySetResult([]);
-            cancellationToken.Register(() =>
+            var pickerDelegate = new PickerDelegate(done);
+            picker.Delegate = pickerDelegate;
+            _picker = picker;
+            _delegate = pickerDelegate;
+            cancellationToken.Register(() => MainThread.BeginInvokeOnMainThread(() =>
             {
-                done.TrySetResult([]);
-                MainThread.BeginInvokeOnMainThread(() => picker.DismissViewController(true, null));
-            });
+                picker.DismissViewController(true, null);
+                Finish(done, []);
+            }));
             var top = Platform.GetCurrentUIViewController()
                 ?? throw new InvalidOperationException("No screen is available to show the file picker.");
+            Services.AppLog.Info("ios", $"Presenting picker for {string.Join(",", types.Select(t => t.Identifier))} (multiple: {multiple})");
             top.PresentViewController(picker, true, null);
             return done.Task;
         });
