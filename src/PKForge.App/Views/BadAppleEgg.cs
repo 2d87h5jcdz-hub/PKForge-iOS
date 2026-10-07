@@ -1,7 +1,7 @@
 #if ANDROID
-using MediaPlayer = Android.Media.MediaPlayer;
+using SongPlayer = Android.Media.MediaPlayer;
 #elif IOS
-using MediaPlayer = AVFoundation.AVAudioPlayer;
+using SongPlayer = AVFoundation.AVAudioPlayer;
 #endif
 using PKForge.App.Services;
 using PKForge.Chrome;
@@ -30,7 +30,7 @@ public sealed class BadAppleEgg : IPadHandler
     private readonly SKFont _font = new(BoxBrowserPage.PixelTypeface(), 20);
     private readonly PlatformMusicPlayer? _music;
     private readonly System.Diagnostics.Stopwatch _clock = new();
-    private MediaPlayer? _song;
+    private SongPlayer? _song;
     private bool _closed;
 
     public static async Task PlayAsync(Grid host)
@@ -93,7 +93,7 @@ public sealed class BadAppleEgg : IPadHandler
             }
             if (_closed) return;
 #if ANDROID
-            var song = new MediaPlayer();
+            var song = new SongPlayer();
             song.SetDataSource(path);
             song.Prepare();
             song.Completion += (_, _) => MainThread.BeginInvokeOnMainThread(Close);
@@ -103,7 +103,7 @@ public sealed class BadAppleEgg : IPadHandler
         }
         catch (Exception error) when (error is IOException or Java.Lang.Exception)
 #else
-            var song = MediaPlayer.FromUrl(Foundation.NSUrl.FromFilename(path), out var failure)
+            var song = SongPlayer.FromUrl(Foundation.NSUrl.FromFilename(path), out var failure)
                 ?? throw new IOException(failure?.LocalizedDescription ?? "The song could not be opened.");
             song.FinishedPlaying += (_, _) => MainThread.BeginInvokeOnMainThread(Close);
             if (_closed) { song.Dispose(); return; }
