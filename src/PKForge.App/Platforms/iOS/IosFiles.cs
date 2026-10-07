@@ -81,7 +81,7 @@ internal static class IosFiles
     public static string DisplayName(NSUrl url) => url.LastPathComponent ?? Path.GetFileName(url.Path) ?? "file";
 
     /// <summary>Runs <paramref name="work"/> with the real path of <paramref name="id"/>, its scope open.</summary>
-    public static T Access<T>(string id, Func<string, T> work)
+    public static T Access<T>(string id, Func<string, T> work, List<string>? trace = null)
     {
         if (id.StartsWith(ChildPrefix, StringComparison.Ordinal))
         {
@@ -90,10 +90,13 @@ internal static class IosFiles
             if (split < 0) throw new FileNotFoundException("Unknown document.", id);
             var folder = body[..split];
             var relative = body[(split + 1)..];
-            return Access(folder, root => work(Path.Combine(root, relative)));
+            return Access(folder, root => work(Path.Combine(root, relative)), trace);
         }
         if (!id.StartsWith(FilePrefix, StringComparison.Ordinal))
+        {
+            trace?.Add($"IOS ACCESS plain path {id}");
             return work(id); // a plain path inside the app's own container
+        }
 
         var path = id[FilePrefix.Length..];
         NSUrl? url = null;
@@ -103,12 +106,15 @@ internal static class IosFiles
         {
             using var data = new NSData(stored, NSDataBase64DecodingOptions.None);
             url = NSUrl.FromBookmarkData(data, NSUrlBookmarkResolutionOptions.WithoutUI, null, out var stale, out var error);
+            trace?.Add($"IOS BOOKMARK resolved={url?.Path ?? "null"} stale={stale} error={error?.LocalizedDescription ?? "-"}");
             if (url is null && error is not null)
                 Services.AppLog.Warn("ios", $"Bookmark for {path} did not resolve: {error.LocalizedDescription}");
             if (url is not null && stale) Remember(url);
         }
+        else trace?.Add($"IOS BOOKMARK missing for {path}");
         url ??= NSUrl.FromFilename(path);
         var scoped = url.StartAccessingSecurityScopedResource();
+        trace?.Add($"IOS SCOPE started={scoped} path={url.Path}");
         try
         {
             return work(url.Path ?? path);
