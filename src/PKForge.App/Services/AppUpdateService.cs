@@ -1,6 +1,8 @@
 using System.Text.Json;
+#if ANDROID
 using Android.App;
 using Android.Content.PM;
+#endif
 using PKForge.Domain;
 
 #if ANDROID
@@ -29,6 +31,11 @@ public sealed class AppUpdateService
 
     public async Task<AppUpdateCheck> CheckAsync(CancellationToken cancellationToken = default)
     {
+#if IOS
+        // PKForge-iOS: the upstream releases ship Android APKs; iOS builds come from this fork's CI.
+        await Task.CompletedTask.ConfigureAwait(false);
+        return new AppUpdateCheck(false, null, "iOS builds are updated from the PKForge-iOS GitHub Actions.");
+#else
         if (AppInfo.Current.PackageName?.EndsWith(".debug", StringComparison.OrdinalIgnoreCase) == true)
             return new AppUpdateCheck(false, null, "Diagnostics builds are updated manually.");
 
@@ -69,6 +76,7 @@ public sealed class AppUpdateService
             AppUpdateRules.IsNewerVersion(AppInfo.Current.VersionString, update.Version)
                 ? $"Version {update.Version} is available."
                 : $"PKForge {AppInfo.Current.VersionString} is up to date.");
+#endif
     }
 
     public bool ShouldPromptAutomatically(AvailableAppUpdate update) =>
@@ -203,6 +211,10 @@ public sealed class AppUpdateService
             || maker.Equals("POCO", StringComparison.OrdinalIgnoreCase)
             || maker.Equals("Redmi", StringComparison.OrdinalIgnoreCase));
 #pragma warning restore CA1416
+#else
+    private static bool CanRequestInstalls() => false;
+
+    public static void OpenInstallPermissionSettings() { }
 #endif
 }
 

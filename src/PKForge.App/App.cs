@@ -12,8 +12,8 @@ public sealed class App : Application
         base.OnSleep();
     }
 
-    private static Platforms.Android.MusicPlayer? Music =>
-        IPlatformApplication.Current?.Services.GetService<Domain.IMusicPlayer>() as Platforms.Android.MusicPlayer;
+    private static PlatformMusicPlayer? Music =>
+        IPlatformApplication.Current?.Services.GetService<Domain.IMusicPlayer>() as PlatformMusicPlayer;
 
     /// <summary>The user's optional default background music starts with the app, once.</summary>
     protected override void OnStart()

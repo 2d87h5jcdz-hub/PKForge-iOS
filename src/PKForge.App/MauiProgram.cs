@@ -92,6 +92,15 @@ public static class MauiProgram
         builder.Services.AddSingleton<IFolderPicker, AndroidFolderPicker>();
         builder.Services.AddSingleton<IFolderFileAccess, AndroidFolderFileAccess>();
         builder.Services.AddSingleton<IEmulatorDetectionService, AndroidEmulatorScanner>();
+#elif IOS
+        builder.Services.AddSingleton<ISaveFileAccess, IosSaveFileAccess>();
+        builder.Services.AddSingleton<Platforms.iOS.MusicPlayer>();
+        builder.Services.AddSingleton<IMusicPlayer>(sp => sp.GetRequiredService<Platforms.iOS.MusicPlayer>());
+        builder.Services.AddSingleton<IDocumentPicker, IosDocumentPicker>();
+        builder.Services.AddSingleton<ISecondaryDisplayHost, IosSecondaryDisplayHost>();
+        builder.Services.AddSingleton<IFolderPicker, IosFolderPicker>();
+        builder.Services.AddSingleton<IFolderFileAccess, IosFolderFileAccess>();
+        builder.Services.AddSingleton<IEmulatorDetectionService, IosEmulatorScanner>();
 #endif
         builder.Services.AddSingleton<IWatchedRootStore, PreferencesWatchedRootStore>();
         builder.Services.AddSingleton<BoxBrowserViewModel>();

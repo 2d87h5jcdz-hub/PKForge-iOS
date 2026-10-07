@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0-android</TargetFramework>
+    <!-- PKForge-iOS: o mesmo app compila para Android e, num Mac, também para iOS
+         (no Linux/Windows o alvo iOS fica de fora, e o build Android segue igual ao original). -->
+    <TargetFrameworks>net10.0-android</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('osx'))">$(TargetFrameworks);net10.0-ios</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <RootNamespace>PKForge.App</RootNamespace>
     <UseMaui>true</UseMaui>
@@ -12,7 +15,23 @@
     <ApplicationTitle>PKForge</ApplicationTitle>
     <ApplicationVersion>310</ApplicationVersion>
     <ApplicationDisplayVersion>3.1.0</ApplicationDisplayVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
     <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-ios'">
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <RuntimeIdentifier>ios-arm64</RuntimeIdentifier>
+    <ApplicationId>org.pkforge.ios</ApplicationId>
+    <!-- PKHeX.Core e o Auto Legality usam reflection e geram código em tempo de execução:
+         o interpretador cobre o que o AOT do iOS não consegue compilar antes. -->
+    <UseInterpreter>true</UseInterpreter>
+    <!-- Só o SDK é podado; o código do PKHeX fica inteiro para a reflection achar os tipos. -->
+    <TrimMode>partial</TrimMode>
+    <MtouchLink>SdkOnly</MtouchLink>
+    <!-- Avisos novos do SDK de iOS não devem derrubar o build do port. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA1416;CA1422;IL2026;IL2104;IL3050</NoWarn>
   </PropertyGroup>
   <PropertyGroup Condition="'$(DiagnosticBuild)' == 'true'">
     <!-- Diagnostic builds install beside production and cannot overwrite its app-private data. -->
@@ -27,6 +46,9 @@
          APK entries are stored, never ZIP-compressed. -->
     <AndroidStoreUncompressedFileExtensions>.so;$(AndroidStoreUncompressedFileExtensions)</AndroidStoreUncompressedFileExtensions>
   </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
+    <AndroidLinkDescription Include="Platforms/Android/linker.xml" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.20" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
@@ -34,7 +56,6 @@
     <PackageReference Include="ZXing.Net" Version="0.16.10" />
   </ItemGroup>
   <ItemGroup>
-    <AndroidLinkDescription Include="Platforms/Android/linker.xml" />
     <MauiIcon Include="Resources/AppIcon/pkforge.png" Color="#14121D" />
     <MauiSplashScreen Include="Resources/Splash/splash.png" Color="#14121D" BaseSize="180,180" />
     <MauiFont Include="Resources/Fonts/*.ttf" />

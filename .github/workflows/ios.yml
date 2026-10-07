@@ -1,0 +1,62 @@
+name: Gerar IPA (iOS)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Escolher o Xcode mais novo
+        run: |
+          ls -d /Applications/Xcode*.app
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Instalar o workload MAUI para iOS
+        run: dotnet workload install maui-ios
+
+      - name: Compilar para iPhone (sem assinatura)
+        run: |
+          set -o pipefail
+          dotnet build src/PKForge.App/PKForge.App.csproj -f net10.0-ios -c Release \
+            -p:RuntimeIdentifier=ios-arm64 \
+            -p:EnableCodeSigning=false \
+            -p:CodesignRequireProvisioningProfile=false \
+            -p:ValidateXcodeVersion=false \
+            2>&1 | tee build.log
+
+      - name: Mostrar erros de compilação
+        if: failure()
+        run: |
+          [ -f build.log ] || exit 0
+          grep -E "error [A-Z]+[0-9]+|: error " build.log | sed -E 's#.*/src/#src/#' | sort -u | head -25 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+
+      - name: Empacotar .ipa
+        run: |
+          APP=$(find src/PKForge.App/bin/Release/net10.0-ios -maxdepth 3 -name "*.app" -type d | head -1)
+          echo "App: $APP"
+          [ -n "$APP" ] || { echo "::error::Nenhum .app foi gerado"; exit 1; }
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry PKForge-iOS.ipa Payload
+          ls -lh PKForge-iOS.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PKForge-iOS-ipa
+          path: PKForge-iOS.ipa

@@ -144,6 +144,7 @@ public sealed class HomePage : ContentPage, IPadHandler
     /// </summary>
     private static void BlockNativeFocus(View view)
     {
+#if ANDROID
         view.HandlerChanged += (_, _) =>
         {
             if (view.Handler?.PlatformView is Android.Views.View platform)
@@ -152,6 +153,7 @@ public sealed class HomePage : ContentPage, IPadHandler
                 platform.FocusableInTouchMode = false;
             }
         };
+#endif
     }
 
     /// <summary>
@@ -163,6 +165,24 @@ public sealed class HomePage : ContentPage, IPadHandler
     /// </summary>
     private static void AttachPress(View view, Action onTap, Action onLongPress)
     {
+#if IOS
+        // iOS: native tap and long-press recognizers; the tap waits for the long press to fail.
+        view.HandlerChanged += (_, _) =>
+        {
+            if (view.Handler?.PlatformView is not UIKit.UIView platform) return;
+            platform.UserInteractionEnabled = true;
+            var longPress = new UIKit.UILongPressGestureRecognizer(gesture =>
+            {
+                if (gesture.State != UIKit.UIGestureRecognizerState.Began) return;
+                new UIKit.UIImpactFeedbackGenerator(UIKit.UIImpactFeedbackStyle.Medium).ImpactOccurred();
+                onLongPress();
+            });
+            var tap = new UIKit.UITapGestureRecognizer(() => onTap());
+            tap.RequireGestureRecognizerToFail(longPress);
+            platform.AddGestureRecognizer(longPress);
+            platform.AddGestureRecognizer(tap);
+        };
+#else
         view.HandlerChanged += (_, _) =>
         {
             if (view.Handler?.PlatformView is not Android.Views.View platform) return;
@@ -206,6 +226,7 @@ public sealed class HomePage : ContentPage, IPadHandler
                 e.Handled = true;
             };
         };
+#endif
     }
 
     // Once per launch, not per page: a color scheme change rebuilds Home, and the new page
@@ -713,7 +734,7 @@ public sealed class HomePage : ContentPage, IPadHandler
         }
         catch (Exception error)
         {
-            Android.Util.Log.Warn("PKForgeUpdate", $"Automatic update check failed: {error}");
+            Services.AppLog.Warn("update", $"Automatic update check failed: {error}");
             if (!automatic)
                 _viewModel.Status = $"Update check failed: {error.Message}";
             return;
@@ -769,7 +790,7 @@ public sealed class HomePage : ContentPage, IPadHandler
         }
         catch (Exception error)
         {
-            Android.Util.Log.Error("PKForgeUpdate", $"Download/install failed: {error}");
+            Services.AppLog.Error("update", "Download/install failed", error);
             _viewModel.Status = $"Update failed: {error.Message}";
             var openRelease = await PadMenu.ConfirmAsync(_hostGrid, "Open the release page?",
                 "The in-app installer could not finish. The GitHub release page has the same APK.", "Open");
@@ -829,7 +850,7 @@ public sealed class HomePage : ContentPage, IPadHandler
         {
             var order = music.Order == Domain.MusicOrder.Shuffle ? "Shuffle" : "In order";
             var auto = music.Autostart ? "ON" : "OFF";
-            var androidMusic = music as Platforms.Android.MusicPlayer;
+            var androidMusic = music as PlatformMusicPlayer;
             var playing = music.IsPlaying
                 ? $"Playing: {music.Library[music.CurrentIndex ?? 0].Title}"
                 : $"Library: {music.Library.Count} track(s)";

@@ -1,4 +1,8 @@
+#if ANDROID
 using MediaPlayer = Android.Media.MediaPlayer;
+#elif IOS
+using MediaPlayer = AVFoundation.AVAudioPlayer;
+#endif
 using PKForge.App.Services;
 using PKForge.Chrome;
 using PKForge.Domain;
@@ -24,7 +28,7 @@ public sealed class BadAppleEgg : IPadHandler
     private readonly BadAppleFrames _frames;
     private readonly BadApplePainter _painter;
     private readonly SKFont _font = new(BoxBrowserPage.PixelTypeface(), 20);
-    private readonly Platforms.Android.MusicPlayer? _music;
+    private readonly PlatformMusicPlayer? _music;
     private readonly System.Diagnostics.Stopwatch _clock = new();
     private MediaPlayer? _song;
     private bool _closed;
@@ -53,7 +57,7 @@ public sealed class BadAppleEgg : IPadHandler
         _painter = new BadApplePainter(_font, "PKFORGE·" + string.Concat(names.Select(name => name.ToUpperInvariant() + "·")));
 
         // The player's music steps aside the way it does when the app leaves the screen.
-        _music = services?.GetService<IMusicPlayer>() as Platforms.Android.MusicPlayer;
+        _music = services?.GetService<IMusicPlayer>() as PlatformMusicPlayer;
         _music?.PauseForBackground();
         App.Suspended += Close;
 
@@ -88,6 +92,7 @@ public sealed class BadAppleEgg : IPadHandler
                 File.Move(partial, path, overwrite: true);
             }
             if (_closed) return;
+#if ANDROID
             var song = new MediaPlayer();
             song.SetDataSource(path);
             song.Prepare();
@@ -97,6 +102,16 @@ public sealed class BadAppleEgg : IPadHandler
             song.Start();
         }
         catch (Exception error) when (error is IOException or Java.Lang.Exception)
+#else
+            var song = MediaPlayer.FromUrl(Foundation.NSUrl.FromFilename(path), out var failure)
+                ?? throw new IOException(failure?.LocalizedDescription ?? "The song could not be opened.");
+            song.FinishedPlaying += (_, _) => MainThread.BeginInvokeOnMainThread(Close);
+            if (_closed) { song.Dispose(); return; }
+            _song = song;
+            song.Play();
+        }
+        catch (IOException error)
+#endif
         {
             // No song: the picture still plays, on its own clock.
             AppLog.Warn("about", $"The easter egg plays without its song: {error.Message}");
@@ -119,7 +134,11 @@ public sealed class BadAppleEgg : IPadHandler
         _router?.Remove(this);
         _host.Remove(_overlay);
         _song?.Stop();
+#if ANDROID
         _song?.Release();
+#else
+        _song?.Dispose();
+#endif
         _song = null;
         _frames.Dispose();
         _font.Dispose();

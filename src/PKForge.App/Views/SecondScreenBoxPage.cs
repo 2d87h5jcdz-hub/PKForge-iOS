@@ -227,7 +227,11 @@ public sealed class SecondScreenBoxPage : ContentPage
         SecondScreenMode.DisableForSession($"the lower screen's {what} failed", error);
         var host = IPlatformApplication.Current?.Services.GetService<ISecondaryDisplayHost>();
         try { _ = host?.DismissAsync(); }
+#if ANDROID
         catch (Exception dismiss) when (dismiss is InvalidOperationException or Java.Lang.Exception)
+#else
+        catch (InvalidOperationException dismiss)
+#endif
         {
             AppLog.Error("second", "Dismissing the lower screen failed", dismiss);
         }
